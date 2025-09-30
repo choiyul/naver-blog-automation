@@ -30,7 +30,7 @@ jobs:
           pyinstaller --onedir --windowed --name "네이버블로그자동화스튜디오" main.py
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: 네이버블로그자동화스튜디오
           path: dist/네이버블로그자동화스튜디오/
