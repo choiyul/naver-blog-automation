@@ -27,10 +27,10 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --onefile --windowed --name "네이버블로그자동화스튜디오" main.py
+          pyinstaller --onedir --windowed --name "네이버블로그자동화스튜디오" main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
-          name: 네이버블로그자동화스튜디오.exe
-          path: dist/네이버블로그자동화스튜디오.exe
+          name: 네이버블로그자동화스튜디오
+          path: dist/네이버블로그자동화스튜디오/
