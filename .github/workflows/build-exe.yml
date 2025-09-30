@@ -27,7 +27,7 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --onefile --windowed --name "네이버블로그자동화스튜디오" --collect-all app --hidden-import app.core.automation.naver_publisher --hidden-import app.core.services.content_service --hidden-import app.ui.components.account_panel --hidden-import app.ui.components.ai_control_panel --hidden-import app.ui.components.mode_panels --hidden-import app.ui.components.repeat_panel --hidden-import app.ui.pages.main_window main.py
+          pyinstaller --onefile --windowed --name "네이버블로그자동화스튜디오" main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
