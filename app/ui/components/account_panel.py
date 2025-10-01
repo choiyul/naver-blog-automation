@@ -65,7 +65,6 @@ class AccountPanel(QtWidgets.QGroupBox):
     request_remove_accounts = QtCore.pyqtSignal(list)  # 여러 계정 삭제용
     request_open_profile = QtCore.pyqtSignal(str)
     request_open_browser = QtCore.pyqtSignal(str)
-    request_cleanup_browser = QtCore.pyqtSignal()  # 브라우저 정리용
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__("계정 관리", parent)
@@ -118,18 +117,6 @@ class AccountPanel(QtWidgets.QGroupBox):
         button_row2.addWidget(self.login_button)
 
         layout.addLayout(button_row2)
-        
-        # 세 번째 줄: 브라우저 정리 버튼 추가
-        button_row3 = QtWidgets.QHBoxLayout()
-        self.cleanup_browser_btn = QtWidgets.QPushButton("🔧 브라우저 정리")
-        self.cleanup_browser_btn.setToolTip("Chrome 프로세스와 락 파일을 정리하여 브라우저 오류를 해결합니다")
-        self.cleanup_browser_btn.clicked.connect(self._on_cleanup_browser_clicked)
-        
-        button_row3.setSpacing(8)
-        button_row3.addWidget(self.cleanup_browser_btn)
-        button_row3.addStretch()  # 버튼을 왼쪽으로 정렬
-        
-        layout.addLayout(button_row3)
 
         # 계정 목록 라벨
         layout.addWidget(QtWidgets.QLabel("계정 목록"))
@@ -539,24 +526,6 @@ class AccountPanel(QtWidgets.QGroupBox):
         if account:
             self.request_open_browser.emit(account.account_id)
     
-    def _on_cleanup_browser_clicked(self) -> None:
-        """브라우저 정리 버튼 클릭 핸들러"""
-        reply = QtWidgets.QMessageBox.question(
-            self,
-            "브라우저 정리",
-            "Chrome 프로세스와 락 파일을 정리합니다.\n"
-            "이 작업은 다음과 같은 작업을 수행합니다:\n\n"
-            "• 모든 Chrome 프로세스 종료\n"
-            "• 프로필 락 파일 정리\n"
-            "• 임시 파일 정리\n\n"
-            "계속하시겠습니까?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.Yes
-        )
-        
-        if reply == QtWidgets.QMessageBox.Yes:
-            self.request_cleanup_browser.emit()
-
     def _confirm_reset(self) -> bool:
         reply = QtWidgets.QMessageBox.question(
             self,
@@ -570,63 +539,73 @@ class AccountPanel(QtWidgets.QGroupBox):
     # --- 외부 API ---
 
     def set_accounts(self, accounts: Iterable[AccountProfile], selected_id: str | None = None) -> None:
-        self.accounts_table.setRowCount(0)
-        self.select_all_checkbox.setCheckState(QtCore.Qt.Unchecked)
-        
-        for account in accounts:
-            row = self.accounts_table.rowCount()
-            self.accounts_table.insertRow(row)
+        # UI 업데이트 배치 처리 (성능 최적화)
+        self.accounts_table.setUpdatesEnabled(False)
+        try:
+            self.accounts_table.setRowCount(0)
+            self.select_all_checkbox.setCheckState(QtCore.Qt.Unchecked)
             
-            # 체크박스 - 위젯으로 중앙 정렬
-            checkbox_widget = QtWidgets.QWidget()
-            checkbox_layout = QtWidgets.QHBoxLayout(checkbox_widget)
-            checkbox_layout.setContentsMargins(0, 0, 0, 0)
-            checkbox_layout.setAlignment(QtCore.Qt.AlignCenter)
-            
-            checkbox = QtWidgets.QCheckBox()
-            checkbox.setProperty('row', row)
-            checkbox.setProperty('account_id', account.account_id)
-            
-            # 체크박스 스타일 적용
-            self._apply_checkbox_style(checkbox)
-            
-            checkbox_layout.addWidget(checkbox)
-            
-            self.accounts_table.setCellWidget(row, 0, checkbox_widget)
-            
-            # 아이디
-            id_item = QtWidgets.QTableWidgetItem(account.account_id)
-            id_item.setData(QtCore.Qt.UserRole, account)
-            id_item.setFlags(QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
-            id_item.setTextAlignment(QtCore.Qt.AlignCenter)  # 중앙 정렬
-            self.accounts_table.setItem(row, 1, id_item)
-            
-            # 상태
-            status_text = "✓ 로그인됨" if account.login_initialized else "로그인 필요"
-            status_item = QtWidgets.QTableWidgetItem(status_text)
-            status_item.setFlags(QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
-            
-            # 상태에 따른 색상 설정 (다크/라이트 모드 호환)
-            if account.login_initialized:
-                # 초록색 계열
-                if self._current_theme == "dark":
-                    status_item.setForeground(QtGui.QColor(34, 197, 94, 200))
+            for account in accounts:
+                row = self.accounts_table.rowCount()
+                self.accounts_table.insertRow(row)
+                
+                # 체크박스 - 위젯으로 중앙 정렬
+                checkbox_widget = QtWidgets.QWidget()
+                checkbox_layout = QtWidgets.QHBoxLayout(checkbox_widget)
+                checkbox_layout.setContentsMargins(0, 0, 0, 0)
+                checkbox_layout.setAlignment(QtCore.Qt.AlignCenter)
+                
+                checkbox = QtWidgets.QCheckBox()
+                checkbox.setProperty('row', row)
+                checkbox.setProperty('account_id', account.account_id)
+                
+                # 체크박스 스타일 적용
+                self._apply_checkbox_style(checkbox)
+                
+                checkbox_layout.addWidget(checkbox)
+                
+                self.accounts_table.setCellWidget(row, 0, checkbox_widget)
+                
+                # 아이디
+                id_item = QtWidgets.QTableWidgetItem(account.account_id)
+                id_item.setData(QtCore.Qt.UserRole, account)
+                id_item.setFlags(QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
+                id_item.setTextAlignment(QtCore.Qt.AlignCenter)  # 중앙 정렬
+                self.accounts_table.setItem(row, 1, id_item)
+                
+                # 상태 - 로그인 실패, 성공, 미시도 표시
+                if account.login_failed:
+                    status_text = "❌ 사용불가"
+                    if self._current_theme == "dark":
+                        status_color = QtGui.QColor(239, 68, 68, 200)  # 빨간색
+                    else:
+                        status_color = QtGui.QColor(220, 38, 38)
+                elif account.login_initialized:
+                    status_text = "✅ 로그인됨"
+                    if self._current_theme == "dark":
+                        status_color = QtGui.QColor(34, 197, 94, 200)  # 초록색
+                    else:
+                        status_color = QtGui.QColor(22, 163, 74)
                 else:
-                    status_item.setForeground(QtGui.QColor(22, 163, 74))  # 라이트 모드: 더 진한 초록색
+                    status_text = "로그인 필요"
+                    if self._current_theme == "dark":
+                        status_color = QtGui.QColor(148, 163, 196, 200)  # 회색
+                    else:
+                        status_color = QtGui.QColor(100, 116, 139)
+                
+                status_item = QtWidgets.QTableWidgetItem(status_text)
+                status_item.setFlags(QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled)
+                status_item.setForeground(status_color)
+                status_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                self.accounts_table.setItem(row, 2, status_item)
+            
+            if self.accounts_table.rowCount() > 0:
+                self.select_account(selected_id)
             else:
-                # 빨간색 계열
-                if self._current_theme == "dark":
-                    status_item.setForeground(QtGui.QColor(239, 68, 68, 200))
-                else:
-                    status_item.setForeground(QtGui.QColor(220, 38, 38))  # 라이트 모드: 더 진한 빨간색
-            
-            status_item.setTextAlignment(QtCore.Qt.AlignCenter)
-            self.accounts_table.setItem(row, 2, status_item)
-        
-        if self.accounts_table.rowCount() > 0:
-            self.select_account(selected_id)
-        else:
-            self.profile_label.setText("-")
+                self.profile_label.setText("-")
+        finally:
+            # UI 업데이트 재개 (배치 처리 완료)
+            self.accounts_table.setUpdatesEnabled(True)
 
     def select_account(self, account_id: str | None) -> None:
         if account_id is None:
@@ -666,7 +645,6 @@ class AccountPanel(QtWidgets.QGroupBox):
             self.remove_selected_btn,
             self.export_account_btn,
             self.login_button,
-            self.cleanup_browser_btn,
             self.accounts_table,
             self.select_all_checkbox,
         ]

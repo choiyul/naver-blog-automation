@@ -10,6 +10,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 class HeaderBar(QtWidgets.QWidget):
     tips_requested = QtCore.pyqtSignal()
+    cleanup_browser_requested = QtCore.pyqtSignal()  # 브라우저 정리 시그널
 
     def __init__(
         self,
@@ -41,27 +42,42 @@ class HeaderBar(QtWidgets.QWidget):
         title_layout.addWidget(subtitle)
 
         controls_layout = QtWidgets.QHBoxLayout()
-        controls_layout.setSpacing(12)
+        controls_layout.setSpacing(8)
+        controls_layout.setAlignment(QtCore.Qt.AlignVCenter)  # 수직 중앙 정렬
 
+        # 브라우저 정리 버튼
+        self.cleanup_button = QtWidgets.QPushButton("🔧")
+        self.cleanup_button.setObjectName("themeToggleButton")
+        self.cleanup_button.setToolTip("브라우저 정리 (로그인 세션 보존)")
+        self.cleanup_button.setFixedSize(44, 34)
+        self.cleanup_button.clicked.connect(self.cleanup_browser_requested.emit)
+        controls_layout.addWidget(self.cleanup_button, 0, QtCore.Qt.AlignVCenter)
+
+        # Tips 버튼
         self.tips_button = QtWidgets.QPushButton("✨ Tips")
         self.tips_button.setObjectName("accentButton")
+        self.tips_button.setFixedHeight(34)
         self.tips_button.clicked.connect(self.tips_requested.emit)
-        controls_layout.addWidget(self.tips_button)
+        controls_layout.addWidget(self.tips_button, 0, QtCore.Qt.AlignVCenter)
 
+        # 모드 전환 버튼
         self.mode_button = QtWidgets.QPushButton()
         self.mode_button.setObjectName("modeToggleButton")
         self.mode_button.setCheckable(True)
-        self.mode_button.setChecked(False)  # 기본값을 수동모드(False)로 변경
+        self.mode_button.setChecked(False)
+        self.mode_button.setFixedHeight(34)
         self.mode_button.clicked.connect(self._handle_mode_clicked)
-        controls_layout.addWidget(self.mode_button)
+        controls_layout.addWidget(self.mode_button, 0, QtCore.Qt.AlignVCenter)
 
+        # 테마 버튼
         self.theme_button = QtWidgets.QPushButton()
         self.theme_button.setObjectName("themeToggleButton")
         self.theme_button.setCheckable(True)
         self.theme_button.setChecked(True)
-        self.theme_button.setIconSize(QtCore.QSize(26, 26))
+        self.theme_button.setFixedSize(44, 34)
+        self.theme_button.setIconSize(QtCore.QSize(24, 24))
         self.theme_button.clicked.connect(self._handle_theme_clicked)
-        controls_layout.addWidget(self.theme_button)
+        controls_layout.addWidget(self.theme_button, 0, QtCore.Qt.AlignVCenter)
         layout.addLayout(title_layout, 1)
         layout.addStretch(1)
         layout.addLayout(controls_layout)

@@ -1,6 +1,7 @@
 """3개 섹션으로 구분된 로그 영역."""
 
 import re
+from datetime import datetime
 from typing import Optional
 
 from PyQt5 import QtCore, QtWidgets, QtGui
@@ -105,8 +106,6 @@ class RepeatPanel(QtWidgets.QWidget):
 
     def _format_log_message(self, message: str) -> str:
         """로그 메시지를 사용자 친화적 형식으로 변환합니다."""
-        from datetime import datetime
-        
         # 미리 컴파일된 정규식 사용 (성능 최적화)
         message = self._LOG_LEVEL_PATTERN.sub('', message)
         

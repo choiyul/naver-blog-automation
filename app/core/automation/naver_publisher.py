@@ -99,38 +99,45 @@ def _cleanup_chrome_processes() -> None:
         LOGGER.debug(f"Chrome 프로세스 정리 중 오류 (무시됨): {e}")
 
 def _cleanup_profile_locks(user_data_dir: Path) -> None:
-    """프로필 디렉토리의 모든 락 파일들을 정리합니다."""
+    """프로필 디렉토리의 프로세스 락 파일만 정리합니다 (로그인 세션 보존)."""
     try:
         if not user_data_dir.exists():
             return
             
-        # 알려진 락 파일들 정리
-        lock_patterns = [
-            "Singleton*", ".*lock*", ".*Lock*", "*Cookie*", 
-            "Local State", "Preferences.tmp", "*.tmp"
+        # 🔒 프로세스 락 파일만 정리 (로그인 세션 보존)
+        process_lock_files = [
+            "SingletonLock", "SingletonSocket", "SingletonCookie",  # Chrome 프로세스 락
+            "lockfile", ".lock", "chrome_debug.log"  # 기타 프로세스 락
         ]
         
-        # 디렉토리와 파일 모두 확인
-        for pattern in lock_patterns:
-            for item in user_data_dir.glob(pattern):
-                try:
-                    if item.is_file():
-                        item.unlink(missing_ok=True)
-                    elif item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
-                except Exception:
-                    pass  # 락 파일 삭제 실패는 무시
+        # 루트 디렉토리에서 프로세스 락 파일만 삭제
+        for lock_file in process_lock_files:
+            lock_path = user_data_dir / lock_file
+            try:
+                if lock_path.exists():
+                    lock_path.unlink(missing_ok=True)
+                    LOGGER.debug(f"프로세스 락 파일 삭제: {lock_file}")
+            except Exception:
+                pass  # 락 파일 삭제 실패는 무시
                     
-        # Default 프로필 내부도 정리
+        # Default 프로필에서도 프로세스 락 파일만 정리
         default_profile = user_data_dir / "Default"
         if default_profile.exists():
-            for pattern in ["*Lock*", "*lock*", "*.tmp"]:
-                for item in default_profile.glob(pattern):
-                    try:
-                        if item.is_file():
-                            item.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+            profile_lock_files = [
+                "lockfile", ".lock", "chrome_debug.log",
+                "TransportSecurity.tmp", "History-journal"  # 임시 파일만
+            ]
+            
+            for lock_file in profile_lock_files:
+                lock_path = default_profile / lock_file
+                try:
+                    if lock_path.exists():
+                        lock_path.unlink(missing_ok=True)
+                        LOGGER.debug(f"프로필 락 파일 삭제: {lock_file}")
+                except Exception:
+                    pass
+                        
+        LOGGER.debug("✅ 프로세스 락 파일 정리 완료 (로그인 세션 보존)")
                         
     except Exception as e:
         LOGGER.debug(f"프로필 락 파일 정리 중 오류 (무시됨): {e}")
@@ -191,9 +198,10 @@ def create_chrome_driver(user_data_dir: Path, retry_count: int = 3) -> webdriver
             LOGGER.info(f"Chrome 브라우저 생성 시도 {attempt + 1}/{retry_count}")
             driver = webdriver.Chrome(options=chrome_options)
             
-            # 페이지 로딩 설정
-            driver.set_page_load_timeout(30)
-            driver.implicitly_wait(10)
+            # 페이지 로딩 설정 - 느린 인터넷 환경 대응
+            driver.set_page_load_timeout(60)  # 30초 -> 60초 증가
+            driver.implicitly_wait(15)  # 10초 -> 15초 증가
+            driver.set_script_timeout(30)  # 스크립트 타임아웃 추가
             
             # 자동화 탐지 방지
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -431,14 +439,26 @@ def _open_blog_write_page(
     _check_account_protection(driver, progress_callback)
 
     try:
-        blog_span = WebDriverWait(driver, 30).until(
+        blog_span = WebDriverWait(driver, 45).until(  # 30초 -> 45초 증가
             EC.presence_of_element_located(
                 (By.XPATH, "//span[contains(@class,'MyView-module__item_text') and text()='블로그']")
             )
         )
     except TimeoutException as exc:
-        _report(progress_callback, "블로그 메뉴를 찾지 못했습니다.", False)
-        raise exc
+        # 네트워크 복구 시도
+        _report(progress_callback, "블로그 메뉴를 찾지 못했습니다. 재시도 중...", False)
+        try:
+            driver.refresh()
+            time.sleep(3)
+            blog_span = WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//span[contains(@class,'MyView-module__item_text') and text()='블로그']")
+                )
+            )
+            LOGGER.info("✅ 새로고침 후 블로그 메뉴 찾기 성공")
+        except TimeoutException:
+            _report(progress_callback, "블로그 메뉴를 찾지 못했습니다.", False)
+            raise RuntimeError("네이버 블로그 메뉴를 찾을 수 없습니다. 네트워크를 확인해주세요.") from exc
 
     # 중단 요청 확인
     if stop_callback and stop_callback():
@@ -454,14 +474,26 @@ def _open_blog_write_page(
     _report(progress_callback, "블로그 메뉴 클릭", True)
 
     try:
-        write_button = WebDriverWait(driver, 30).until(
+        write_button = WebDriverWait(driver, 45).until(  # 30초 -> 45초 증가
             EC.element_to_be_clickable(
                 (By.CSS_SELECTOR, "a.MyView-module__link_tool___tAoH1.MyView-module__type_write___l9FOk")
             )
         )
     except TimeoutException as exc:
-        _report(progress_callback, "글쓰기 버튼을 찾지 못했습니다.", False)
-        raise exc
+        # 스크롤 후 재시도
+        _report(progress_callback, "글쓰기 버튼을 찾지 못했습니다. 재시도 중...", False)
+        try:
+            driver.execute_script("window.scrollTo(0, 0);")  # 상단으로
+            time.sleep(2)
+            write_button = WebDriverWait(driver, 30).until(
+                EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, "a.MyView-module__link_tool___tAoH1.MyView-module__type_write___l9FOk")
+                )
+            )
+            LOGGER.info("✅ 스크롤 후 글쓰기 버튼 찾기 성공")
+        except TimeoutException:
+            _report(progress_callback, "글쓰기 버튼을 찾지 못했습니다.", False)
+            raise RuntimeError("글쓰기 버튼을 찾을 수 없습니다. 네트워크를 확인해주세요.") from exc
 
     # 중단 요청 확인
     if stop_callback and stop_callback():
@@ -473,7 +505,7 @@ def _open_blog_write_page(
     _report(progress_callback, "글쓰기 버튼 클릭", True)
 
     try:
-        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > len(handles_before))
+        WebDriverWait(driver, 20).until(lambda d: len(d.window_handles) > len(handles_before))  # 10초 -> 20초
     except TimeoutException:
         _report(progress_callback, "새 글쓰기 창을 열지 못했습니다.", False)
         raise
@@ -489,7 +521,7 @@ def _open_blog_write_page(
     
     try:
         # ID로 바로 전환 (이전 테스트에서 성공한 방법)
-        WebDriverWait(driver, 10).until(EC.frame_to_be_available_and_switch_to_it("mainFrame"))
+        WebDriverWait(driver, 20).until(EC.frame_to_be_available_and_switch_to_it("mainFrame"))  # 10초 -> 20초
         LOGGER.info("mainFrame 전환 성공")
         _report(progress_callback, "편집기 iframe 전환 완료", True)
         
@@ -497,7 +529,7 @@ def _open_blog_write_page(
         try:
             # CSS selector로 대안 시도
             _report(progress_callback, "대안 방법으로 iframe 전환 시도", False)
-            frame_element = WebDriverWait(driver, 10).until(
+            frame_element = WebDriverWait(driver, 20).until(  # 10초 -> 20초
                 EC.presence_of_element_located((By.CSS_SELECTOR, "iframe#mainFrame"))
             )
             driver.switch_to.frame(frame_element)
@@ -595,14 +627,14 @@ def _insert_image(
         # 1. 본문 영역 찾기
         try:
             # 본문 편집 가능한 영역 찾기
-            body_area = WebDriverWait(driver, 10).until(
+            body_area = WebDriverWait(driver, 20).until(  # 10초 -> 20초
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".se-component.se-text .se-text-paragraph"))
             )
             LOGGER.info("본문 편집 영역 찾기 성공")
         except TimeoutException:
             # 대안: 제목 다음에 새로운 영역 생성
             try:
-                title_area = WebDriverWait(driver, 10).until(
+                title_area = WebDriverWait(driver, 20).until(  # 10초 -> 20초
                     EC.presence_of_element_located((By.CSS_SELECTOR, ".se-component.se-documentTitle"))
                 )
                 title_area.click()
@@ -747,7 +779,7 @@ def _publish_post(
     # 이전 테스트에서 성공한 방법 우선 시도
     try:
         # 성공한 XPath로 바로 시도
-        publish_button = WebDriverWait(driver, 8).until(
+        publish_button = WebDriverWait(driver, 15).until(  # 8초 -> 15초
             EC.element_to_be_clickable((By.XPATH, "//span[contains(@class,'text__d09H7') and text()='발행']"))
         )
         LOGGER.info("발행 버튼 찾기 성공")

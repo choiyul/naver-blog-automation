@@ -8,13 +8,20 @@ def setup_logging() -> None:
     base_dir = Path(__file__).resolve().parents[2]
     log_dir = base_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 파일 핸들러 - 버퍼링으로 I/O 최적화
+    file_handler = logging.FileHandler(
+        log_dir / "app.log", 
+        encoding="utf-8",
+        delay=True  # 첫 로그까지 파일 열기 지연
+    )
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
 
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            # 윈도우에서 콘솔이 뜨지 않도록 파일 로그만 유지
-            logging.FileHandler(log_dir / "app.log", encoding="utf-8"),
-        ],
+        handlers=[file_handler],
+        force=True,
     )

@@ -105,6 +105,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self._apply_resize_changes)
         
+        # 설정 저장 debounce 타이머 (성능 최적화)
+        self._settings_save_timer = QtCore.QTimer()
+        self._settings_save_timer.setSingleShot(True)
+        self._settings_save_timer.timeout.connect(self._do_save_settings)
+        
+        # 계정 저장 debounce 타이머 (성능 최적화)
+        self._accounts_save_timer = QtCore.QTimer()
+        self._accounts_save_timer.setSingleShot(True)
+        self._accounts_save_timer.timeout.connect(self._do_save_accounts)
+        
         # 스타일시트 캐시
         self._original_qss: Optional[str] = None
 
@@ -194,6 +204,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._connect_signals()
         self.header.tips_requested.connect(self._show_tips)
+        self.header.cleanup_browser_requested.connect(self._cleanup_browser_sessions)
 
     def _connect_signals(self) -> None:
         self.ai_control_panel.api_key_changed.connect(self._on_api_key_changed)
@@ -219,7 +230,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.account_panel.request_remove_accounts.connect(self._on_remove_accounts)
         self.account_panel.request_open_profile.connect(self._open_profile_dir)
         self.account_panel.request_open_browser.connect(self._open_browser_for_account)
-        self.account_panel.request_cleanup_browser.connect(self._cleanup_browser_sessions)
 
     # --- 상태 관리 ---
 
@@ -257,20 +267,30 @@ class MainWindow(QtWidgets.QMainWindow):
             self.manual_panel.image_file_edit.setText(settings.image_file_path)
 
     def _save_settings(self) -> None:
-        settings = UserSettings(
-            keyword=self.ai_control_panel.keyword_edit.text(),
-            use_ai=self._is_ai_mode,
-            api_key=self.ai_control_panel.api_key_edit.text(),
-            model=self.ai_control_panel.model_combo.currentText(),
-            manual_title=self.manual_panel.manual_title_edit.text(),
-            manual_tags=self.manual_panel.manual_tags_edit.text(),
-            repeat_enabled=self.manual_panel.repeat_toggle_btn.isChecked(),
-            interval_minutes=self.manual_panel._current_interval,
-            image_file_path=self.manual_panel.image_file_edit.text(),
-            schedule_minutes=self.manual_panel._current_schedule,
-            schedule_enabled=self.manual_panel._schedule_enabled,
-        )
-        save_settings(self._settings_file(), settings)
+        """설정 저장을 debounce로 처리 (성능 최적화)"""
+        # 타이머를 재시작하여 500ms 후에 실제 저장
+        self._settings_save_timer.stop()
+        self._settings_save_timer.start(500)
+    
+    def _do_save_settings(self) -> None:
+        """실제 설정 저장 수행"""
+        try:
+            settings = UserSettings(
+                keyword=self.ai_control_panel.keyword_edit.text(),
+                use_ai=self._is_ai_mode,
+                api_key=self.ai_control_panel.api_key_edit.text(),
+                model=self.ai_control_panel.model_combo.currentText(),
+                manual_title=self.manual_panel.manual_title_edit.text(),
+                manual_tags=self.manual_panel.manual_tags_edit.text(),
+                repeat_enabled=self.manual_panel.repeat_toggle_btn.isChecked(),
+                interval_minutes=self.manual_panel._current_interval,
+                image_file_path=self.manual_panel.image_file_edit.text(),
+                schedule_minutes=self.manual_panel._current_schedule,
+                schedule_enabled=self.manual_panel._schedule_enabled,
+            )
+            save_settings(self._settings_file(), settings)
+        except Exception as e:
+            logger.debug(f"설정 저장 중 오류 (무시됨): {e}")
 
     def _load_accounts(self) -> None:
         accounts_map = load_accounts(self._accounts_file(), self.profiles_root)
@@ -279,7 +299,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_accounts_ui(selected_id)
 
     def _save_accounts(self) -> None:
-        save_accounts(self._accounts_file(), self._accounts.values())
+        """계정 저장을 debounce로 처리 (성능 최적화)"""
+        # 타이머를 재시작하여 300ms 후에 실제 저장
+        self._accounts_save_timer.stop()
+        self._accounts_save_timer.start(300)
+    
+    def _do_save_accounts(self) -> None:
+        """실제 계정 저장 수행"""
+        try:
+            save_accounts(self._accounts_file(), self._accounts.values())
+        except Exception as e:
+            logger.debug(f"계정 저장 중 오류 (무시됨): {e}")
 
     def _refresh_accounts_ui(self, selected_id: str | None = None) -> None:
         self.account_panel.set_accounts(self._accounts.values(), selected_id)
@@ -508,13 +538,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 driver.get(url)
 
                 # 페이지 로딩 대기
-                WebDriverWait(driver, 15).until(
+                WebDriverWait(driver, 30).until(  # 15초 -> 30초 증가 (느린 인터넷)
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
 
                 # 페이지 완전 로딩 확인
                 try:
-                    WebDriverWait(driver, 8).until(
+                    WebDriverWait(driver, 20).until(  # 8초 -> 20초 증가
                         lambda d: d.execute_script("return document.readyState") == "complete"
                     )
                     self._log(f"✅ 네이버 페이지 접속 성공: {url}")
@@ -638,7 +668,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _check_login_status(self, driver) -> bool:
         """네이버 로그인 상태를 정확하게 확인합니다."""
         try:
-            WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))  # 5초 -> 15초
         except Exception:
             return False
 
@@ -785,7 +815,7 @@ class MainWindow(QtWidgets.QMainWindow):
             logout_button = None
             for selector in logout_selectors:
                 try:
-                    logout_button = WebDriverWait(driver, 5).until(
+                    logout_button = WebDriverWait(driver, 10).until(  # 5초 -> 10초
                         EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
                     )
                     self._log(f"로그아웃 버튼 찾음: {selector}")
@@ -839,7 +869,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
             try:
                 # 로그인 버튼 찾기 및 클릭
-                login_button = WebDriverWait(driver, 10).until(
+                login_button = WebDriverWait(driver, 20).until(  # 10초 -> 20초
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "a.MyView-module__link_login___HpHMW"))
                 )
                 
@@ -888,7 +918,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             # ID 입력 필드 찾기 및 입력
             self._log("아이디 입력 중...")
-            id_input = WebDriverWait(driver, 10).until(
+            id_input = WebDriverWait(driver, 20).until(  # 10초 -> 20초
                 EC.presence_of_element_located((By.CSS_SELECTOR, "input#id"))
             )
             
@@ -901,7 +931,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # 비밀번호 입력 필드 찾기 및 입력
             if account.password:
                 self._log("비밀번호 입력 중...")
-                pw_input = WebDriverWait(driver, 5).until(
+                pw_input = WebDriverWait(driver, 10).until(  # 5초 -> 10초
                     EC.presence_of_element_located((By.CSS_SELECTOR, "input#pw"))
                 )
                 
@@ -944,7 +974,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
             for selector in checkbox_selectors:
                 try:
-                    checkbox_element = WebDriverWait(driver, 3).until(
+                    checkbox_element = WebDriverWait(driver, 10).until(  # 3초 -> 10초
                         EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
                     )
                     used_selector = selector
@@ -1064,9 +1094,25 @@ class MainWindow(QtWidgets.QMainWindow):
                     return
                 continue
         
-        # 5분 후에도 로그인이 완료되지 않았을 때
+        # 5분 후에도 로그인이 완료되지 않았을 때 - 계정을 사용불가로 표시
         self._log("⏰ 로그인 대기 시간이 초과되었습니다 (5분).")
-        self._log("💡 브라우저를 닫지 말고 로그인을 완료해주세요.")
+        self._log("❌ 해당 계정은 '사용불가'로 표시됩니다.")
+        
+        # 계정을 로그인 실패로 표시
+        account = self._accounts.get(account_id)
+        if account:
+            account.login_failed = True
+            self._accounts[account_id] = account
+            self._save_accounts()
+            self._refresh_accounts_ui(account_id)
+            self._log(f"❌ '{account_id}' 계정이 사용불가로 표시되었습니다.")
+        
+        # 브라우저 닫기
+        try:
+            driver.quit()
+            self._driver = None
+        except Exception:
+            pass
 
     def _verify_login_success(self, driver) -> bool:
         """쿠키를 확인하여 로그인 성공을 검증합니다."""
@@ -1175,7 +1221,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _auto_fill_login_form(self, driver, account: AccountProfile) -> bool:
         try:
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input#id")))
+            WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input#id")))  # 10초 -> 20초
             id_input = driver.find_element(By.CSS_SELECTOR, "input#id")
             pw_input = driver.find_element(By.CSS_SELECTOR, "input#pw")
             id_input.clear()
@@ -1515,8 +1561,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QApplication.processEvents()
 
     def _cleanup_browser_sessions(self) -> None:
-        """브라우저 세션 정리를 수행합니다."""
+        """브라우저 세션 정리를 수행합니다 (로그인 세션 보존)."""
         from app.core.automation.naver_publisher import _cleanup_chrome_processes, _cleanup_profile_locks
+        
+        # 확인 메시지 표시
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "브라우저 정리",
+            "🔧 Chrome 프로세스와 락 파일을 정리합니다.\n\n"
+            "✅ 로그인 세션과 쿠키는 보존됩니다!\n"
+            "✅ 프로세스 락 파일만 삭제합니다.\n\n"
+            "브라우저 오류 해결에 도움이 됩니다.\n"
+            "계속하시겠습니까?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes
+        )
+        
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
         
         self._log("🔧 브라우저 정리를 시작합니다...")
         
@@ -1525,22 +1587,22 @@ class MainWindow(QtWidgets.QMainWindow):
             _cleanup_chrome_processes()
             self._log("✅ Chrome 프로세스 정리 완료")
             
-            # 모든 계정의 프로필 락 파일 정리
+            # 모든 계정의 프로필 락 파일 정리 (로그인 세션 보존)
             cleaned_profiles = 0
             for account in self._accounts.values():
                 _cleanup_profile_locks(account.profile_dir)
                 cleaned_profiles += 1
             
             self._log(f"✅ {cleaned_profiles}개 계정 프로필 락 파일 정리 완료")
+            self._log("✅ 로그인 세션과 캐시는 보존되었습니다")
             
             QtWidgets.QMessageBox.information(
                 self,
                 "브라우저 정리 완료", 
                 "✅ 브라우저 정리가 완료되었습니다!\n\n"
-                "다음 작업이 수행되었습니다:\n"
-                f"• Chrome 프로세스 정리\n"
-                f"• {cleaned_profiles}개 계정 프로필 정리\n"
-                f"• 임시 파일 정리\n\n"
+                "✔ Chrome 프로세스 종료\n"
+                f"✔ {cleaned_profiles}개 계정 프로필 락 파일 정리\n"
+                "✔ 로그인 세션 및 쿠키 보존\n\n"
                 "이제 브라우저 오류 없이 계정을 사용할 수 있습니다."
             )
             
@@ -1552,6 +1614,39 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"브라우저 정리 중 오류가 발생했습니다:\n{e}\n\n"
                 "수동으로 Chrome을 완전히 종료한 후 다시 시도해주세요."
             )
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        """프로그램 종료 시 리소스 정리 (메모리 누수 방지)"""
+        try:
+            # 모든 타이머 정지
+            if hasattr(self, '_resize_timer'):
+                self._resize_timer.stop()
+            if hasattr(self, '_settings_save_timer'):
+                # 저장 대기 중인 설정이 있으면 즉시 저장
+                if self._settings_save_timer.isActive():
+                    self._settings_save_timer.stop()
+                    self._do_save_settings()
+            if hasattr(self, '_accounts_save_timer'):
+                # 저장 대기 중인 계정이 있으면 즉시 저장
+                if self._accounts_save_timer.isActive():
+                    self._accounts_save_timer.stop()
+                    self._do_save_accounts()
+            
+            # 워커 스레드 정리
+            if self._worker and self._worker.isRunning():
+                self._worker.request_stop()
+                self._worker.wait(3000)  # 최대 3초 대기
+            
+            # 브라우저 정리
+            if self._driver:
+                try:
+                    self._driver.quit()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"프로그램 종료 시 리소스 정리 중 오류 (무시됨): {e}")
+        
+        super().closeEvent(event)
 
     def _show_tips(self) -> None:
         QtWidgets.QMessageBox.information(
@@ -1646,14 +1741,15 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
 
                     self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
                     
-                    # 기존 브라우저가 있으면 닫기
+                    # 기존 브라우저가 있으면 정리
                     if self.driver:
                         try:
                             self.driver.quit()
-                            time.sleep(2)
-                        except:
+                            time.sleep(1.5)  # 2초 -> 1.5초 단축
+                        except Exception:
                             pass
-                        self.driver = None
+                        finally:
+                            self.driver = None
 
                     # 새 브라우저 생성 (계정별 프로필 사용)
                     try:
@@ -1686,10 +1782,10 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                         logger.warning(f"계정 '{account_id}' 보호조치: {e}")
                         continue  # 다음 계정으로 넘어감
                     
-                    # 계정 간 대기 시간 (안정성)
+                    # 계정 간 대기 시간 최적화 (안정성 유지)
                     if index < self.total_accounts:  # 마지막 계정이 아니면
-                        self.progress_signal.emit("⏳ 다음 계정 전환을 위해 잠시 대기 중...", False)
-                        time.sleep(3)
+                        self.progress_signal.emit("⏳ 다음 계정 전환 준비 중...", False)
+                        time.sleep(2)  # 3초 -> 2초 단축
                 
                 # for 루프가 끝난 후 (모든 계정 처리 완료)
                 # 무한 반복이 아니면 한 사이클만 실행하고 종료
@@ -1700,10 +1796,10 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                 if self._should_stop():
                     break
                 
-                # 다음 순환 전 대기
+                # 다음 순환 전 대기 최적화
                 if self.infinite_loop:
-                    self.progress_signal.emit("⏳ 다음 순환을 위해 잠시 대기 중...", False)
-                    time.sleep(5)
+                    self.progress_signal.emit("⏳ 다음 순환 준비 중...", False)
+                    time.sleep(3)  # 5초 -> 3초 단축
 
         except Exception as exc:
             self.error_signal.emit(f"다중 계정 워크플로우 오류: {exc}")

@@ -31,6 +31,7 @@ class AccountProfile:
     profile_dir: Path
     password: str = ""
     login_initialized: bool = False
+    login_failed: bool = False  # 로그인 실패 여부 (사용 불가 계정)
 
 
 SettingsData = dict[str, Any]
