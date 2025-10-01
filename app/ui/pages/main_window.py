@@ -219,6 +219,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.account_panel.request_remove_accounts.connect(self._on_remove_accounts)
         self.account_panel.request_open_profile.connect(self._open_profile_dir)
         self.account_panel.request_open_browser.connect(self._open_browser_for_account)
+        self.account_panel.request_cleanup_browser.connect(self._cleanup_browser_sessions)
 
     # --- 상태 관리 ---
 
@@ -1513,13 +1514,53 @@ class MainWindow(QtWidgets.QMainWindow):
             if ms > 100:
                 QtWidgets.QApplication.processEvents()
 
+    def _cleanup_browser_sessions(self) -> None:
+        """브라우저 세션 정리를 수행합니다."""
+        from app.core.automation.naver_publisher import _cleanup_chrome_processes, _cleanup_profile_locks
+        
+        self._log("🔧 브라우저 정리를 시작합니다...")
+        
+        try:
+            # Chrome 프로세스 정리
+            _cleanup_chrome_processes()
+            self._log("✅ Chrome 프로세스 정리 완료")
+            
+            # 모든 계정의 프로필 락 파일 정리
+            cleaned_profiles = 0
+            for account in self._accounts.values():
+                _cleanup_profile_locks(account.profile_dir)
+                cleaned_profiles += 1
+            
+            self._log(f"✅ {cleaned_profiles}개 계정 프로필 락 파일 정리 완료")
+            
+            QtWidgets.QMessageBox.information(
+                self,
+                "브라우저 정리 완료", 
+                "✅ 브라우저 정리가 완료되었습니다!\n\n"
+                "다음 작업이 수행되었습니다:\n"
+                f"• Chrome 프로세스 정리\n"
+                f"• {cleaned_profiles}개 계정 프로필 정리\n"
+                f"• 임시 파일 정리\n\n"
+                "이제 브라우저 오류 없이 계정을 사용할 수 있습니다."
+            )
+            
+        except Exception as e:
+            self._log(f"❌ 브라우저 정리 중 오류: {e}")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "브라우저 정리 오류",
+                f"브라우저 정리 중 오류가 발생했습니다:\n{e}\n\n"
+                "수동으로 Chrome을 완전히 종료한 후 다시 시도해주세요."
+            )
+
     def _show_tips(self) -> None:
         QtWidgets.QMessageBox.information(
             self,
             "Tips",
             "1. AI 모드에서 키 확인 후 자동화를 시작하세요.\n"
             "2. 수동 모드에서는 제목과 본문 파일을 선택하세요.\n"
-            "3. 계정을 추가한 뒤 브라우저 열기를 통해 쿠키를 저장하면 좋습니다.",
+            "3. 계정을 추가한 뒤 브라우저 열기를 통해 쿠키를 저장하면 좋습니다.\n"
+            "4. 브라우저 오류 발생 시 '브라우저 정리' 기능을 사용하세요.",
         )
 
 

@@ -79,76 +79,149 @@ def _cmd_key():
     return Keys.CONTROL if _is_windows() else Keys.COMMAND
 
 
-def create_chrome_driver(user_data_dir: Path) -> webdriver.Chrome:
-    if user_data_dir.exists():
-        for item in user_data_dir.iterdir():
-            if item.is_file() and item.name.startswith("Singleton"):
-                item.unlink(missing_ok=True)
-    
-    chrome_options = Options()
-    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
-    chrome_options.add_argument("--profile-directory=Default")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--disable-infobars")
-    chrome_options.add_argument("--start-maximized")
-    chrome_options.add_argument("--lang=ko-KR")
-    
-    # 최소한의 안정성 설정만 유지
-    chrome_options.add_argument("--ignore-certificate-errors-spki-list")
-    chrome_options.add_argument("--ignore-ssl-errors-spki-list")
-    
-    # OS에 맞춘 User-Agent 적용
-    if _is_windows():
-        chrome_options.add_argument(
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-        )
-    else:
-        chrome_options.add_argument(
-            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
-        )
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option("useAutomationExtension", False)
-    
-    # 기본 페이지 설정만 유지
-    chrome_options.add_experimental_option("prefs", {
-        "profile.default_content_setting_values.notifications": 2,
-        "profile.default_content_settings.popups": 0,
-        "download.default_directory": str(user_data_dir / "Downloads"),
-        "disk-cache-size": 0
-    })
-
+def _cleanup_chrome_processes() -> None:
+    """Chrome 프로세스를 완전히 정리합니다."""
     try:
-        driver = webdriver.Chrome(options=chrome_options)
-        
-        # 페이지 로딩 타임아웃 설정
-        driver.set_page_load_timeout(30)
-        driver.implicitly_wait(10)
-        
-        # webdriver 속성 숨기기
-        driver.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {"source": "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"},
-        )
-        
-        # 캐시/쿠키 클리어 비활성화 (로그인 세션 및 성능 최적화)
-        # 로그인 세션을 유지하고 브라우저 시작 속도를 높이기 위해 캐시 삭제 비활성화
-        # try:
-        #     driver.execute_cdp_cmd("Network.clearBrowserCache", {})
-        #     driver.execute_cdp_cmd("Network.clearBrowserCookies", {})
-        #     LOGGER.info("브라우저 캐시 및 쿠키 클리어 완료")
-        # except Exception:
-        #     LOGGER.debug("캐시 클리어 실패 (무시)")
-        
-        LOGGER.info("브라우저 캐시/쿠키 보존으로 로그인 세션 유지")
-        
-        LOGGER.info("Chrome 드라이버가 성공적으로 생성되었습니다.")
-        return driver
-        
+        if _is_windows():
+            # Windows에서 Chrome 프로세스 종료
+            subprocess.run(['taskkill', '/f', '/im', 'chrome.exe'], 
+                         capture_output=True, text=True, timeout=10)
+            subprocess.run(['taskkill', '/f', '/im', 'chromedriver.exe'], 
+                         capture_output=True, text=True, timeout=10)
+        else:
+            # macOS/Linux에서 Chrome 프로세스 종료
+            subprocess.run(['pkill', '-f', 'Google Chrome'], 
+                         capture_output=True, text=True, timeout=10)
+            subprocess.run(['pkill', '-f', 'chromedriver'], 
+                         capture_output=True, text=True, timeout=10)
+        time.sleep(1)  # 프로세스 종료 대기
     except Exception as e:
-        LOGGER.error(f"Chrome 드라이버 생성 실패: {e}")
-        raise
+        LOGGER.debug(f"Chrome 프로세스 정리 중 오류 (무시됨): {e}")
+
+def _cleanup_profile_locks(user_data_dir: Path) -> None:
+    """프로필 디렉토리의 모든 락 파일들을 정리합니다."""
+    try:
+        if not user_data_dir.exists():
+            return
+            
+        # 알려진 락 파일들 정리
+        lock_patterns = [
+            "Singleton*", ".*lock*", ".*Lock*", "*Cookie*", 
+            "Local State", "Preferences.tmp", "*.tmp"
+        ]
+        
+        # 디렉토리와 파일 모두 확인
+        for pattern in lock_patterns:
+            for item in user_data_dir.glob(pattern):
+                try:
+                    if item.is_file():
+                        item.unlink(missing_ok=True)
+                    elif item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                except Exception:
+                    pass  # 락 파일 삭제 실패는 무시
+                    
+        # Default 프로필 내부도 정리
+        default_profile = user_data_dir / "Default"
+        if default_profile.exists():
+            for pattern in ["*Lock*", "*lock*", "*.tmp"]:
+                for item in default_profile.glob(pattern):
+                    try:
+                        if item.is_file():
+                            item.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                        
+    except Exception as e:
+        LOGGER.debug(f"프로필 락 파일 정리 중 오류 (무시됨): {e}")
+
+def create_chrome_driver(user_data_dir: Path, retry_count: int = 3) -> webdriver.Chrome:
+    """Chrome 드라이버를 생성합니다. 실패 시 재시도합니다."""
+    
+    for attempt in range(retry_count):
+        try:
+            # 1단계: Chrome 프로세스 정리 (첫 번째 시도에서만)
+            if attempt == 0:
+                _cleanup_chrome_processes()
+            
+            # 2단계: 프로필 락 파일 정리
+            _cleanup_profile_locks(user_data_dir)
+            
+            # 3단계: Chrome 옵션 설정
+            chrome_options = Options()
+            chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
+            chrome_options.add_argument("--profile-directory=Default")
+            
+            # 세션 충돌 방지 옵션 추가
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_argument("--disable-infobars")
+            chrome_options.add_argument("--start-maximized")
+            chrome_options.add_argument("--lang=ko-KR")
+            chrome_options.add_argument("--no-first-run")
+            chrome_options.add_argument("--disable-default-apps")
+            chrome_options.add_argument("--disable-popup-blocking")
+            
+            # 재시도 시에는 더 강력한 옵션 추가
+            if attempt > 0:
+                chrome_options.add_argument("--force-device-scale-factor=1")
+                chrome_options.add_argument("--disable-gpu-sandbox")
+                
+            # 최소한의 안정성 설정
+            chrome_options.add_argument("--ignore-certificate-errors-spki-list")
+            chrome_options.add_argument("--ignore-ssl-errors-spki-list")
+    
+            # OS에 맞춘 User-Agent 적용
+            if _is_windows():
+                chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            else:
+                chrome_options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option("useAutomationExtension", False)
+            
+            # 기본 페이지 설정
+            chrome_options.add_experimental_option("prefs", {
+                "profile.default_content_setting_values.notifications": 2,
+                "profile.default_content_settings.popups": 0,
+                "download.default_directory": str(user_data_dir / "Downloads"),
+                "disk-cache-size": 0
+            })
+            
+            # 드라이버 생성 시도
+            LOGGER.info(f"Chrome 브라우저 생성 시도 {attempt + 1}/{retry_count}")
+            driver = webdriver.Chrome(options=chrome_options)
+            
+            # 페이지 로딩 설정
+            driver.set_page_load_timeout(30)
+            driver.implicitly_wait(10)
+            
+            # 자동화 탐지 방지
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+            })
+            
+            LOGGER.info("✅ Chrome 브라우저 생성 성공")
+            return driver
+            
+        except Exception as exc:
+            LOGGER.warning(f"Chrome 브라우저 생성 실패 (시도 {attempt + 1}/{retry_count}): {exc}")
+            
+            if attempt < retry_count - 1:
+                # 재시도 전 추가 대기 및 정리
+                time.sleep(2 + attempt)  # 점진적 대기 시간 증가
+                _cleanup_chrome_processes()  # 다시 정리
+                continue
+            else:
+                # 모든 시도 실패 - 사용자 친화적 오류 메시지
+                raise RuntimeError(
+                    f"❌ Chrome 브라우저를 시작할 수 없습니다.\n\n"
+                    f"오류 내용: {exc}\n\n"
+                    f"💡 해결 방법:\n"
+                    f"1. Chrome 브라우저를 완전히 종료하고 다시 시도해주세요\n"
+                    f"2. 작업 관리자에서 chrome.exe 프로세스를 모두 종료해주세요\n"
+                    f"3. 컴퓨터를 재시작한 후 다시 시도해주세요\n"
+                    f"4. 다른 Chrome 창이나 브라우저를 모두 닫고 시도해주세요"
+                ) from exc
 
 
 def configure_user_data_dir(base_dir: Path, account_id: Optional[str] = None) -> Path:

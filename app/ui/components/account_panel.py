@@ -65,6 +65,7 @@ class AccountPanel(QtWidgets.QGroupBox):
     request_remove_accounts = QtCore.pyqtSignal(list)  # 여러 계정 삭제용
     request_open_profile = QtCore.pyqtSignal(str)
     request_open_browser = QtCore.pyqtSignal(str)
+    request_cleanup_browser = QtCore.pyqtSignal()  # 브라우저 정리용
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__("계정 관리", parent)
@@ -117,6 +118,18 @@ class AccountPanel(QtWidgets.QGroupBox):
         button_row2.addWidget(self.login_button)
 
         layout.addLayout(button_row2)
+        
+        # 세 번째 줄: 브라우저 정리 버튼 추가
+        button_row3 = QtWidgets.QHBoxLayout()
+        self.cleanup_browser_btn = QtWidgets.QPushButton("🔧 브라우저 정리")
+        self.cleanup_browser_btn.setToolTip("Chrome 프로세스와 락 파일을 정리하여 브라우저 오류를 해결합니다")
+        self.cleanup_browser_btn.clicked.connect(self._on_cleanup_browser_clicked)
+        
+        button_row3.setSpacing(8)
+        button_row3.addWidget(self.cleanup_browser_btn)
+        button_row3.addStretch()  # 버튼을 왼쪽으로 정렬
+        
+        layout.addLayout(button_row3)
 
         # 계정 목록 라벨
         layout.addWidget(QtWidgets.QLabel("계정 목록"))
@@ -525,6 +538,24 @@ class AccountPanel(QtWidgets.QGroupBox):
         account = self._current_account()
         if account:
             self.request_open_browser.emit(account.account_id)
+    
+    def _on_cleanup_browser_clicked(self) -> None:
+        """브라우저 정리 버튼 클릭 핸들러"""
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "브라우저 정리",
+            "Chrome 프로세스와 락 파일을 정리합니다.\n"
+            "이 작업은 다음과 같은 작업을 수행합니다:\n\n"
+            "• 모든 Chrome 프로세스 종료\n"
+            "• 프로필 락 파일 정리\n"
+            "• 임시 파일 정리\n\n"
+            "계속하시겠습니까?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes
+        )
+        
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.request_cleanup_browser.emit()
 
     def _confirm_reset(self) -> bool:
         reply = QtWidgets.QMessageBox.question(
@@ -635,6 +666,7 @@ class AccountPanel(QtWidgets.QGroupBox):
             self.remove_selected_btn,
             self.export_account_btn,
             self.login_button,
+            self.cleanup_browser_btn,
             self.accounts_table,
             self.select_all_checkbox,
         ]
