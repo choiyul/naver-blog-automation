@@ -65,6 +65,7 @@ class AccountPanel(QtWidgets.QGroupBox):
     request_remove_accounts = QtCore.pyqtSignal(list)  # 여러 계정 삭제용
     request_open_profile = QtCore.pyqtSignal(str)
     request_open_browser = QtCore.pyqtSignal(str)
+    request_batch_login = QtCore.pyqtSignal(list)  # 일괄 로그인용
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__("계정 관리", parent)
@@ -75,12 +76,12 @@ class AccountPanel(QtWidgets.QGroupBox):
     def _build_ui(self) -> None:
         self.setObjectName("accountPanel")
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)  # 간격을 12에서 8로 줄임
+        layout.setContentsMargins(16, 12, 16, 12)  # 상하 여백 축소
 
         form_layout = QtWidgets.QFormLayout()
         form_layout.setHorizontalSpacing(12)
-        form_layout.setVerticalSpacing(8)
+        form_layout.setVerticalSpacing(6)  # 8에서 6으로 줄임
         self.account_id_edit = QtWidgets.QLineEdit()
         self.account_pw_edit = QtWidgets.QLineEdit()
         self.account_pw_edit.setEchoMode(QtWidgets.QLineEdit.Password)
@@ -91,39 +92,46 @@ class AccountPanel(QtWidgets.QGroupBox):
 
         # 첫 번째 줄: 계정 추가, 일괄 추가, 선택 삭제
         button_row1 = QtWidgets.QHBoxLayout()
-        self.add_account_btn = QtWidgets.QPushButton("계정 추가")
+        self.add_account_btn = QtWidgets.QPushButton("추가")
         self.add_account_btn.clicked.connect(self._on_add_clicked)
-        self.bulk_add_btn = QtWidgets.QPushButton("일괄 추가")
+        self.bulk_add_btn = QtWidgets.QPushButton("일괄추가")
         self.bulk_add_btn.clicked.connect(self._on_bulk_add_clicked)
-        self.remove_selected_btn = QtWidgets.QPushButton("선택 삭제")
+        self.remove_selected_btn = QtWidgets.QPushButton("삭제")
         self.remove_selected_btn.clicked.connect(self._on_remove_selected_clicked)
 
-        button_row1.setSpacing(8)
+        button_row1.setSpacing(6)
         button_row1.addWidget(self.add_account_btn)
         button_row1.addWidget(self.bulk_add_btn)
         button_row1.addWidget(self.remove_selected_btn)
 
         layout.addLayout(button_row1)
 
-        # 두 번째 줄: 프로필 열기, 브라우저 열기
+        # 두 번째 줄: 프로필 열기, 브라우저 열기, 일괄 로그인
         button_row2 = QtWidgets.QHBoxLayout()
-        self.export_account_btn = QtWidgets.QPushButton("프로필 열기")
+        self.export_account_btn = QtWidgets.QPushButton("프로필")
         self.export_account_btn.clicked.connect(self._on_open_profile_clicked)
-        self.login_button = QtWidgets.QPushButton("브라우저 열기")
+        self.login_button = QtWidgets.QPushButton("브라우저")
         self.login_button.clicked.connect(self._on_open_browser_clicked)
+        self.batch_login_btn = QtWidgets.QPushButton("일괄로그인")
+        self.batch_login_btn.clicked.connect(self._on_batch_login_clicked)
+        self.batch_login_btn.setStyleSheet("font-weight: bold;")
 
-        button_row2.setSpacing(8)
+        button_row2.setSpacing(6)
         button_row2.addWidget(self.export_account_btn)
         button_row2.addWidget(self.login_button)
+        button_row2.addWidget(self.batch_login_btn)
 
         layout.addLayout(button_row2)
 
         # 계정 목록 라벨
-        layout.addWidget(QtWidgets.QLabel("계정 목록"))
+        accounts_label = QtWidgets.QLabel("계정 목록")
+        accounts_label.setStyleSheet("font-weight: bold; font-size: 13px; margin-top: 4px;")
+        layout.addWidget(accounts_label)
 
         # 테이블 위젯 생성
         self.accounts_table = QtWidgets.QTableWidget()
         self.accounts_table.setColumnCount(3)
+        self.accounts_table.setMinimumHeight(300)  # 최소 높이 설정으로 더 많은 계정 표시
         
         # 전체 선택 체크박스를 헤더에 추가
         self.select_all_checkbox = QtWidgets.QCheckBox()
@@ -526,6 +534,49 @@ class AccountPanel(QtWidgets.QGroupBox):
         if account:
             self.request_open_browser.emit(account.account_id)
     
+    def _on_batch_login_clicked(self) -> None:
+        """선택된 계정들에 대해 일괄 로그인을 요청합니다."""
+        checked_accounts = self.get_checked_accounts()
+        
+        if not checked_accounts:
+            QtWidgets.QMessageBox.warning(
+                self, 
+                "선택 오류", 
+                "일괄 로그인할 계정을 선택해주세요.\n체크박스를 선택하여 계정을 지정할 수 있습니다."
+            )
+            return
+        
+        # 확인 대화상자
+        max_preview = 10
+        if len(checked_accounts) <= max_preview:
+            account_list = "\n".join(f"- {account_id}" for account_id in checked_accounts)
+            message = (
+                f"{len(checked_accounts)}개의 계정에 대해 순차적으로 로그인을 진행합니다.\n\n"
+                f"{account_list}\n\n"
+                f"각 계정마다 브라우저가 열리고, 로그인을 완료하면 자동으로 다음 계정으로 넘어갑니다.\n"
+                f"계속 진행하시겠습니까?"
+            )
+        else:
+            preview_list = "\n".join(f"- {account_id}" for account_id in checked_accounts[:max_preview])
+            remaining_count = len(checked_accounts) - max_preview
+            message = (
+                f"총 {len(checked_accounts)}개의 계정에 대해 순차적으로 로그인을 진행합니다.\n\n"
+                f"{preview_list}\n... 외 {remaining_count}개\n\n"
+                f"각 계정마다 브라우저가 열리고, 로그인을 완료하면 자동으로 다음 계정으로 넘어갑니다.\n"
+                f"계속 진행하시겠습니까?"
+            )
+        
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "일괄 로그인 확인",
+            message,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes,
+        )
+        
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.request_batch_login.emit(checked_accounts)
+    
     def _confirm_reset(self) -> bool:
         reply = QtWidgets.QMessageBox.question(
             self,
@@ -645,6 +696,7 @@ class AccountPanel(QtWidgets.QGroupBox):
             self.remove_selected_btn,
             self.export_account_btn,
             self.login_button,
+            self.batch_login_btn,
             self.accounts_table,
             self.select_all_checkbox,
         ]

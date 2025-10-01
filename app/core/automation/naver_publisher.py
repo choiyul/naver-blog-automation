@@ -154,44 +154,58 @@ def create_chrome_driver(user_data_dir: Path, retry_count: int = 3) -> webdriver
             # 2단계: 프로필 락 파일 정리
             _cleanup_profile_locks(user_data_dir)
             
-            # 3단계: Chrome 옵션 설정
+            # 3단계: Chrome 옵션 설정 (CAPTCHA 우회 최적화)
             chrome_options = Options()
             chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
             chrome_options.add_argument("--profile-directory=Default")
             
-            # 세션 충돌 방지 옵션 추가
+            # 자동화 감지 우회 (가장 중요!)
             chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+            chrome_options.add_experimental_option("useAutomationExtension", False)
+            
+            # 일반 브라우저처럼 보이게 설정
             chrome_options.add_argument("--disable-infobars")
             chrome_options.add_argument("--start-maximized")
-            chrome_options.add_argument("--lang=ko-KR")
+            chrome_options.add_argument("--lang=ko-KR,ko,en-US,en")
             chrome_options.add_argument("--no-first-run")
+            chrome_options.add_argument("--no-service-autorun")
             chrome_options.add_argument("--disable-default-apps")
             chrome_options.add_argument("--disable-popup-blocking")
+            
+            # 브라우저 핑거프린트 정상화
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-accelerated-2d-canvas")
+            chrome_options.add_argument("--disable-gpu")  # GPU 감지 우회
+            chrome_options.add_argument("--window-size=1920,1080")
             
             # 재시도 시에는 더 강력한 옵션 추가
             if attempt > 0:
                 chrome_options.add_argument("--force-device-scale-factor=1")
-                chrome_options.add_argument("--disable-gpu-sandbox")
                 
             # 최소한의 안정성 설정
-            chrome_options.add_argument("--ignore-certificate-errors-spki-list")
-            chrome_options.add_argument("--ignore-ssl-errors-spki-list")
+            chrome_options.add_argument("--ignore-certificate-errors")
+            chrome_options.add_argument("--ignore-ssl-errors")
     
-            # OS에 맞춘 User-Agent 적용
+            # OS에 맞춘 실제 User-Agent (최신 버전)
             if _is_windows():
-                chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             else:
-                chrome_options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            chrome_options.add_experimental_option("useAutomationExtension", False)
+            chrome_options.add_argument(f"--user-agent={user_agent}")
             
-            # 기본 페이지 설정
+            # 실제 사용자처럼 보이는 환경 설정
             chrome_options.add_experimental_option("prefs", {
                 "profile.default_content_setting_values.notifications": 2,
                 "profile.default_content_settings.popups": 0,
                 "download.default_directory": str(user_data_dir / "Downloads"),
-                "disk-cache-size": 0
+                "profile.password_manager_enabled": False,  # 비밀번호 관리자 비활성화
+                "credentials_enable_service": False,
+                "download.prompt_for_download": False,
+                "download.directory_upgrade": True,
+                "safebrowsing.enabled": True,  # 일반 브라우저처럼
+                "plugins.always_open_pdf_externally": True,
             })
             
             # 드라이버 생성 시도
@@ -203,9 +217,40 @@ def create_chrome_driver(user_data_dir: Path, retry_count: int = 3) -> webdriver
             driver.implicitly_wait(15)  # 10초 -> 15초 증가
             driver.set_script_timeout(30)  # 스크립트 타임아웃 추가
             
-            # 자동화 탐지 방지
+            # 자동화 탐지 방지 (강화 버전)
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-                "source": "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+                "source": """
+                    // webdriver 속성 숨기기
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    
+                    // chrome 속성 추가 (일반 브라우저처럼)
+                    window.chrome = {
+                        runtime: {},
+                        loadTimes: function() {},
+                        csi: function() {},
+                        app: {}
+                    };
+                    
+                    // permissions 속성 정상화
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                            Promise.resolve({ state: Notification.permission }) :
+                            originalQuery(parameters)
+                    );
+                    
+                    // plugins 속성 정상화
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                    
+                    // languages 속성 정상화
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['ko-KR', 'ko', 'en-US', 'en']
+                    });
+                """
             })
             
             LOGGER.info("✅ Chrome 브라우저 생성 성공")

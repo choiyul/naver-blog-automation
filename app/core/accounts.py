@@ -102,12 +102,19 @@ def load_accounts(db_path: Path, profiles_root: Path) -> dict[str, AccountProfil
     for row in rows:
         account_id = row["account_id"]
         profile_dir = profiles_root / sanitize_account_id(account_id)
+        
+        # sqlite3.Row는 get 메서드가 없으므로 try-except로 처리
+        try:
+            login_failed_value = row["login_failed"]
+        except (KeyError, IndexError):
+            login_failed_value = 0
+        
         accounts[account_id] = AccountProfile(
             account_id=account_id,
             profile_dir=profile_dir,
             password=row["password"] or "",
             login_initialized=bool(row["login_initialized"]),
-            login_failed=bool(row.get("login_failed", 0)),  # 기본값 0
+            login_failed=bool(login_failed_value),
         )
 
     return accounts

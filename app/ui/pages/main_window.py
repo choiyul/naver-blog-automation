@@ -35,6 +35,87 @@ from ..components.repeat_panel import RepeatPanel
 logger = logging.getLogger(__name__)
 
 
+class BatchLoginWorker(QtCore.QThread):
+    """일괄 로그인 작업을 수행하는 워커 스레드"""
+    finished_signal = QtCore.pyqtSignal(int, list)  # success_count, failed_accounts
+    error_signal = QtCore.pyqtSignal(str)
+    progress_signal = QtCore.pyqtSignal(str)
+    
+    def __init__(self, main_window, account_ids: list[str], delay_seconds: int = 10, parent=None):
+        super().__init__(parent)
+        self.main_window = main_window
+        self.account_ids = account_ids
+        self.delay_seconds = delay_seconds  # 계정 간 대기 시간 (CAPTCHA 방지)
+        self._stop_requested = False
+    
+    def request_stop(self):
+        """중단 요청"""
+        self._stop_requested = True
+    
+    def _should_stop(self) -> bool:
+        """중단 요청 여부 확인"""
+        return self._stop_requested
+    
+    def run(self):
+        """일괄 로그인 실행"""
+        import time
+        import random
+        
+        success_count = 0
+        failed_accounts = []
+        
+        for idx, account_id in enumerate(self.account_ids, 1):
+            if self._should_stop():
+                self.progress_signal.emit("❌ 사용자에 의해 중단되었습니다.")
+                break
+            
+            self.progress_signal.emit("")
+            self.progress_signal.emit(f"{'=' * 70}")
+            self.progress_signal.emit(f"📝 [{idx}/{len(self.account_ids)}] '{account_id}' 계정 로그인 시작")
+            self.progress_signal.emit(f"{'=' * 70}")
+            
+            # 첫 번째 계정이 아니면 CAPTCHA 방지를 위한 대기 시간 적용
+            if idx > 1 and self.delay_seconds > 0:
+                # 약간의 랜덤 시간 추가 (더 자연스럽게)
+                actual_delay = self.delay_seconds + random.randint(0, 5)
+                self.progress_signal.emit(f"⏳ CAPTCHA 방지: 다음 로그인까지 {actual_delay}초 대기 중...")
+                
+                # 1초씩 카운트다운하면서 중단 요청 확인
+                for remaining in range(actual_delay, 0, -1):
+                    if self._should_stop():
+                        self.progress_signal.emit("❌ 사용자에 의해 중단되었습니다.")
+                        self.finished_signal.emit(success_count, failed_accounts)
+                        return
+                    
+                    if remaining % 5 == 0 or remaining <= 3:  # 5초마다 또는 마지막 3초
+                        self.progress_signal.emit(f"  ... {remaining}초 남음")
+                    time.sleep(1)
+                
+                self.progress_signal.emit("✅ 대기 완료, 로그인 시작")
+            
+            try:
+                # 메인 윈도우의 메서드를 직접 호출하여 로그인 수행
+                result = self.main_window._batch_login_single_account(account_id, self._should_stop, self.progress_signal.emit)
+                
+                if result == "success":
+                    success_count += 1
+                elif result == "skipped":
+                    success_count += 1  # 이미 로그인된 계정도 성공으로 간주
+                elif result == "stopped":
+                    self.progress_signal.emit("❌ 사용자에 의해 중단되었습니다.")
+                    break
+                else:  # failed
+                    failed_accounts.append((account_id, result))
+                    
+            except Exception as exc:
+                error_msg = str(exc)[:50]
+                self.progress_signal.emit(f"❌ '{account_id}' 계정 로그인 중 오류 발생: {error_msg}")
+                failed_accounts.append((account_id, error_msg))
+        
+        # 최종 결과 발송
+        self.finished_signal.emit(success_count, failed_accounts)
+
+
 class _ApiKeyValidator(QtCore.QObject):
     finished = QtCore.pyqtSignal(bool, str)
 
@@ -140,6 +221,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._driver: Optional[object] = None
         self._worker: Optional[WorkflowWorker] = None
+        self._batch_login_worker: Optional[BatchLoginWorker] = None
         self._accounts: Dict[str, AccountProfile] = {}
         self._selected_account_id: Optional[str] = None
         self._api_valid = False
@@ -230,6 +312,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.account_panel.request_remove_accounts.connect(self._on_remove_accounts)
         self.account_panel.request_open_profile.connect(self._open_profile_dir)
         self.account_panel.request_open_browser.connect(self._open_browser_for_account)
+        self.account_panel.request_batch_login.connect(self._batch_login_accounts)
 
     # --- 상태 관리 ---
 
@@ -890,10 +973,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 driver.get("https://nid.naver.com/nidlogin.login")
                 self._non_blocking_wait_ms(2000)
 
-            # 2단계: 로그인 폼에 아이디/비밀번호 입력
+            # 2단계: 로그인 폼에 아이디/비밀번호 입력 (일괄 로그인이 아닌 경우)
             self._log("2단계: 로그인 폼에 정보를 입력 중...")
             
-            if self._fill_login_form_auto(driver, account):
+            if self._fill_login_form_auto(driver, account, auto_click_login=False):
                 self._log("✅ 아이디와 비밀번호를 성공적으로 입력했습니다.")
             else:
                 self._log("⚠️ 일부 정보만 입력되었습니다. 수동 확인이 필요할 수 있습니다.")
@@ -912,7 +995,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._log(f"❌ {error_msg}")
             QtWidgets.QMessageBox.warning(self, "자동 로그인 오류", error_msg)
 
-    def _fill_login_form_auto(self, driver, account: AccountProfile) -> bool:
+    def _fill_login_form_auto(self, driver, account: AccountProfile, auto_click_login: bool = False) -> bool:
         """로그인 폼에 아이디와 비밀번호를 자동으로 입력합니다."""
         
         try:
@@ -929,6 +1012,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._non_blocking_wait_ms(1000)
             
             # 비밀번호 입력 필드 찾기 및 입력
+            password_entered = False
             if account.password:
                 self._log("비밀번호 입력 중...")
                 pw_input = WebDriverWait(driver, 10).until(  # 5초 -> 10초
@@ -941,16 +1025,84 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._non_blocking_wait_ms(1000)
                 
                 self._log("✅ 아이디와 비밀번호 입력 완료")
+                password_entered = True
             else:
                 self._log("⚠️ 저장된 비밀번호가 없습니다. 아이디만 입력했습니다.")
             
             # 로그인 상태 유지 체크박스 클릭 (아이디만 있어도 실행)
             self._click_keep_login_checkbox(driver)
             
-            return account.password is not None
+            # 자동 로그인 버튼 클릭 (일괄 로그인에서만 사용)
+            if auto_click_login and password_entered:
+                self._non_blocking_wait_ms(1000)
+                if self._click_login_button(driver):
+                    self._log("✅ 로그인 버튼 자동 클릭 완료")
+                    return True
+                else:
+                    self._log("⚠️ 로그인 버튼 클릭 실패 - 수동으로 클릭해주세요")
+            
+            return password_entered
                 
         except Exception as exc:
             self._log(f"❌ 로그인 폼 입력 실패: {exc}")
+            return False
+    
+    def _click_login_button(self, driver) -> bool:
+        """로그인 버튼을 자동으로 클릭합니다."""
+        try:
+            self._log("로그인 버튼을 찾는 중...")
+            
+            # 여러 선택자로 로그인 버튼 찾기
+            login_button_selectors = [
+                "button#log\\.login",  # ID 선택자 (점을 이스케이프)
+                "button.btn_login",
+                "button[type='submit'].btn_login",
+                "#log\\.login",
+                ".btn_login.next_step"
+            ]
+            
+            login_button = None
+            used_selector = None
+            
+            for selector in login_button_selectors:
+                try:
+                    login_button = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                    used_selector = selector
+                    self._log(f"로그인 버튼 찾음: {selector}")
+                    break
+                except:
+                    continue
+            
+            if not login_button:
+                self._log("⚠️ 로그인 버튼을 찾을 수 없습니다.")
+                return False
+            
+            # 버튼이 화면에 보이도록 스크롤
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", login_button)
+                self._non_blocking_wait_ms(500)
+            except:
+                pass
+            
+            # 로그인 버튼 클릭 시도
+            try:
+                login_button.click()
+                self._log("✅ 로그인 버튼 클릭 성공 (일반 클릭)")
+                return True
+            except:
+                try:
+                    # JavaScript 클릭 시도
+                    driver.execute_script("arguments[0].click();", login_button)
+                    self._log("✅ 로그인 버튼 클릭 성공 (JavaScript)")
+                    return True
+                except Exception as e:
+                    self._log(f"❌ 로그인 버튼 클릭 실패: {e}")
+                    return False
+                    
+        except Exception as exc:
+            self._log(f"❌ 로그인 버튼 클릭 중 오류: {exc}")
             return False
 
     def _click_keep_login_checkbox(self, driver) -> None:
@@ -1352,12 +1504,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log(f"🔄 계정 전환: {current_account} ({current_index}/{total_accounts})")
 
     def _stop_workflow(self) -> None:
+        # 일반 워크플로우 중단
         if self._worker and self._worker.isRunning():
             self._worker.request_stop()
             # 작업 중단 알림 표시
             self.repeat_panel.append_log("🛑 사용자가 작업을 중단했습니다")
             QtWidgets.QMessageBox.information(self, "작업 중단", "작업을 멈췄습니다.")
             self._set_controls_enabled(True)
+        
+        # 일괄 로그인 워커 중단
+        if self._batch_login_worker and self._batch_login_worker.isRunning():
+            self._batch_login_worker.request_stop()
+            self._log("일괄 로그인 중단 요청됨. 현재 계정 처리 완료 후 중단됩니다.")
 
     def _on_progress_update(self, message: str, completed: bool) -> None:
         suffix = "완료" if completed else "진행 중"
@@ -1559,6 +1717,370 @@ class MainWindow(QtWidgets.QMainWindow):
             # fallback에서도 processEvents 호출 최소화
             if ms > 100:
                 QtWidgets.QApplication.processEvents()
+
+    def _batch_login_accounts(self, account_ids: list[str]) -> None:
+        """선택된 계정들에 대해 순차적으로 일괄 로그인을 수행합니다. (워커 스레드 사용)"""
+        if not account_ids:
+            return
+        
+        # 이미 실행 중인 워커가 있으면 무시
+        if self._batch_login_worker and self._batch_login_worker.isRunning():
+            self._log("⚠️ 이미 일괄 로그인이 실행 중입니다.")
+            return
+        
+        # 빠른 처리 모드 확인
+        total_accounts = len(account_ids)
+        estimated_time_fast = total_accounts * 1.5  # 1.5분/계정 (5초 대기)
+        estimated_time_safe = total_accounts * 2.5  # 2.5분/계정 (15초 대기)
+        
+        # 모드 선택 다이얼로그
+        msg_box = QtWidgets.QMessageBox(self)
+        msg_box.setWindowTitle("일괄 로그인 모드 선택")
+        msg_box.setText(f"🚀 {total_accounts}개 계정 일괄 로그인\n\n어떤 모드로 진행하시겠습니까?")
+        msg_box.setInformativeText(
+            f"🚀 초고속 모드 (2초 대기):\n"
+            f"   • 100개: 약 50분\n"
+            f"   • CAPTCHA: 높음 (30-40%)\n"
+            f"   • ⏰ 시간 제한 있을 때 추천!\n\n"
+            f"⚡ 빠른 모드 (5초 대기):\n"
+            f"   • 100개: 약 {int(estimated_time_fast)}분\n"
+            f"   • CAPTCHA: 중간 (20-30%)\n"
+            f"   • 균형잡힌 선택\n\n"
+            f"🛡️ 안전 모드 (15초 대기):\n"
+            f"   • 100개: 약 {int(estimated_time_safe)}분\n"
+            f"   • CAPTCHA: 낮음 (5-10%)\n"
+            f"   • 시간 여유 있을 때"
+        )
+        
+        turbo_button = msg_box.addButton("🚀 초고속", QtWidgets.QMessageBox.AcceptRole)
+        fast_button = msg_box.addButton("⚡ 빠른", QtWidgets.QMessageBox.AcceptRole)
+        safe_button = msg_box.addButton("🛡️ 안전", QtWidgets.QMessageBox.AcceptRole)
+        custom_button = msg_box.addButton("⚙️ 사용자 지정", QtWidgets.QMessageBox.AcceptRole)
+        cancel_button = msg_box.addButton("취소", QtWidgets.QMessageBox.RejectRole)
+        
+        msg_box.exec_()
+        clicked_button = msg_box.clickedButton()
+        
+        if clicked_button == cancel_button:
+            return
+        elif clicked_button == turbo_button:
+            delay_seconds = 2
+        elif clicked_button == fast_button:
+            delay_seconds = 5
+        elif clicked_button == safe_button:
+            delay_seconds = 15
+        else:  # custom_button
+            delay_seconds, ok = QtWidgets.QInputDialog.getInt(
+                self,
+                "사용자 지정 설정",
+                f"계정 간 대기 시간을 설정하세요.\n\n"
+                f"💡 권장 설정:\n"
+                f"• 3-5초: 매우 빠름 (CAPTCHA 위험 높음)\n"
+                f"• 10-15초: 균형잡힌 속도\n"
+                f"• 20-30초: 안전한 속도\n\n"
+                f"⏱️ 100개 기준 예상 시간:\n"
+                f"• 5초: 약 {int(total_accounts * 1.5)}분\n"
+                f"• 10초: 약 {int(total_accounts * 2)}분\n"
+                f"• 15초: 약 {int(total_accounts * 2.5)}분",
+                10,  # 기본값: 10초
+                0,   # 최소값: 0초
+                300, # 최대값: 5분
+                1    # 단계
+            )
+            if not ok:
+                return
+        
+        # 예상 시간 계산
+        estimated_minutes = int(total_accounts * (delay_seconds + 60) / 60)  # 60초 = 로그인 처리 시간
+        
+        self._log("=" * 70)
+        self._log(f"🚀 일괄 로그인 시작: 총 {total_accounts}개 계정")
+        self._log(f"⏱️  계정 간 대기 시간: {delay_seconds}초")
+        self._log(f"⏰ 예상 완료 시간: 약 {estimated_minutes}분")
+        
+        if delay_seconds >= 15:
+            self._log("🛡️ 안전: CAPTCHA 5-10%")
+        elif delay_seconds >= 5:
+            self._log("⚡ 빠른: CAPTCHA 20-30%")
+        elif delay_seconds >= 2:
+            self._log("🚀 초고속: CAPTCHA 30-40% | 100개=50분")
+        else:
+            self._log("🔥 극한: CAPTCHA 50%+ | 빠르지만 위험")
+        
+        self._log("💡 CAPTCHA 나오면 즉시 풀기 (30초 대기)")
+        self._log("=" * 70)
+        
+        # UI 비활성화 (진행 중 다른 작업 방지)
+        self.account_panel.enable_controls(False)
+        self.manual_panel.enable_controls(False)
+        
+        # 워커 스레드 생성 및 시작
+        self._batch_login_worker = BatchLoginWorker(self, account_ids, delay_seconds, self)
+        self._batch_login_worker.progress_signal.connect(self._log)
+        self._batch_login_worker.finished_signal.connect(self._on_batch_login_finished)
+        self._batch_login_worker.start()
+    
+    def _on_batch_login_finished(self, success_count: int, failed_accounts: list) -> None:
+        """일괄 로그인 완료 시 호출"""
+        # 최종 결과 출력
+        self._log("")
+        self._log("=" * 70)
+        self._log(f"✨ 일괄 로그인 완료")
+        total_count = success_count + len(failed_accounts)
+        self._log(f"   성공: {success_count}개 / 전체: {total_count}개")
+        if failed_accounts:
+            self._log(f"   실패: {len(failed_accounts)}개")
+            self._log("")
+            self._log("❌ 실패한 계정:")
+            for account_id, reason in failed_accounts:
+                self._log(f"   - {account_id}: {reason}")
+        self._log("=" * 70)
+        
+        # UI 재활성화
+        self.account_panel.enable_controls(True)
+        self.manual_panel.enable_controls(True)
+        
+        # 최종 결과 다이얼로그
+        if len(failed_accounts) == 0:
+            QtWidgets.QMessageBox.information(
+                self, 
+                "일괄 로그인 완료", 
+                f"✅ 모든 계정({success_count}개)이 성공적으로 로그인되었습니다!"
+            )
+        else:
+            failed_list = "\n".join([f"• {acc}: {reason}" for acc, reason in failed_accounts[:5]])
+            if len(failed_accounts) > 5:
+                failed_list += f"\n... 외 {len(failed_accounts) - 5}개"
+            
+            QtWidgets.QMessageBox.warning(
+                self, 
+                "일괄 로그인 완료 (일부 실패)", 
+                f"✅ 성공: {success_count}개\n❌ 실패: {len(failed_accounts)}개\n\n"
+                f"실패한 계정:\n{failed_list}\n\n"
+                f"실패한 계정은 수동으로 '브라우저 열기'를 통해 로그인해주세요."
+            )
+    
+    def _batch_login_single_account(self, account_id: str, should_stop_func, log_func) -> str:
+        """단일 계정 로그인을 수행합니다. (워커 스레드에서 호출됨)
+        
+        Returns:
+            "success": 로그인 성공
+            "skipped": 이미 로그인됨 (건너뛰기)
+            "stopped": 사용자에 의해 중단됨
+            기타: 실패 이유
+        """
+        account = self._accounts.get(account_id)
+        if not account:
+            log_func(f"❌ '{account_id}' 계정을 찾을 수 없습니다. 건너뜁니다.")
+            return "계정 정보 없음"
+        
+        # 이미 로그인된 계정은 건너뛰기
+        if account.login_initialized:
+            log_func(f"✅ '{account_id}' 계정은 이미 로그인된 상태입니다. 건너뜁니다.")
+            return "skipped"
+        
+        try:
+            # 브라우저 생성
+            log_func(f"'{account_id}' 계정용 브라우저 생성 중...")
+            driver = create_chrome_driver(account.profile_dir)
+            log_func(f"✅ 브라우저 생성 완료")
+            self._driver = driver
+            
+            # 네이버 메인 페이지 접속
+            self._non_blocking_wait_ms(1000)  # 2초 → 1초로 단축
+            log_func("네이버 접속 중...")
+            
+            try:
+                driver.get("https://www.naver.com/")
+                WebDriverWait(driver, 15).until(  # 30초 → 15초로 단축
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                log_func("✅ 접속 OK")
+            except Exception as exc:
+                log_func(f"❌ 네이버 접속 실패: {exc}")
+                try:
+                    driver.quit()
+                except:
+                    pass
+                self._driver = None
+                return "네이버 접속 실패"
+            
+            # 중단 요청 확인
+            if should_stop_func():
+                log_func("❌ 사용자에 의해 중단되었습니다.")
+                try:
+                    driver.quit()
+                except:
+                    pass
+                self._driver = None
+                return "stopped"
+            
+            # 로그인 상태 확인
+            current_logged_in_account = self._check_current_logged_in_account(driver)
+            
+            if current_logged_in_account == account_id:
+                    # 이미 로그인되어 있음
+                    log_func(f"✅ '{account_id}' 이미 로그인됨 (건너뜀)")
+                    self._mark_account_logged_in(account_id)
+                    try:
+                        driver.quit()
+                        self._non_blocking_wait_ms(500)  # 2초 → 0.5초로 단축
+                    except:
+                        pass
+                    self._driver = None
+                    return "skipped"
+                
+            elif current_logged_in_account and current_logged_in_account != account_id:
+                # 다른 계정이 로그인되어 있음 - 로그아웃
+                log_func(f"⚠️ 다른 계정 '{current_logged_in_account}'이 로그인되어 있습니다. 로그아웃을 시도합니다.")
+                if self._logout_current_account(driver):
+                    log_func("✅ 기존 계정 로그아웃 완료")
+                else:
+                    log_func("⚠️ 로그아웃 실패, 계속 진행합니다.")
+            
+            # 자동 로그인 수행 (로그인 버튼 자동 클릭)
+            log_func(f"🔐 '{account_id}' 계정 자동 로그인을 시작합니다...")
+            
+            try:
+                # 로그인 페이지로 이동 (최적화)
+                try:
+                    login_button = WebDriverWait(driver, 10).until(  # 20초 → 10초
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, "a.MyView-module__link_login___HpHMW"))
+                    )
+                    driver.execute_script("arguments[0].click();", login_button)  # JS 클릭 (더 빠름)
+                    self._non_blocking_wait_ms(2000)  # 3초 → 2초
+                except Exception:
+                    driver.get("https://nid.naver.com/nidlogin.login")
+                    self._non_blocking_wait_ms(1500)  # 2초 → 1.5초
+                
+                # 로그인 폼에 정보 입력 및 자동 로그인 버튼 클릭
+                if self._fill_login_form_auto(driver, account, auto_click_login=True):
+                    log_func("✅ 정보 입력 및 로그인 클릭 완료")
+                else:
+                    log_func("⚠️ 자동 로그인 실패")
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+                    self._driver = None
+                    return "자동 로그인 버튼 클릭 실패"
+                    
+            except Exception as login_exc:
+                log_func(f"❌ 로그인 프로세스 오류: {login_exc}")
+                try:
+                    driver.quit()
+                except:
+                    pass
+                self._driver = None
+                return "로그인 프로세스 오류"
+            
+            # 로그인 완료 대기 (최대 30초 - 초고속 처리)
+            log_func("⏳ 로그인 완료 대기 중... (최대 30초)")
+            log_func("💡 CAPTCHA 나오면 즉시 풀어주세요!")
+            login_success = False
+            
+            captcha_detected = False
+            for attempt in range(10):  # 10회 * 3초 = 30초 (초고속 처리)
+                self._non_blocking_wait_ms(3000)  # 4초 → 3초로 단축
+                
+                # 중단 요청 확인
+                if should_stop_func():
+                    log_func("❌ 사용자에 의해 중단되었습니다.")
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+                    self._driver = None
+                    return "stopped"
+                
+                try:
+                    # 브라우저 연결 확인
+                    current_url = driver.current_url
+                    
+                    # CAPTCHA 감지
+                    if not captcha_detected:
+                        try:
+                            # CAPTCHA 요소 찾기
+                            captcha_elements = driver.find_elements(By.CSS_SELECTOR, 
+                                ".captcha, #captcha, [id*='captcha'], [class*='captcha']")
+                            if captcha_elements and len(captcha_elements) > 0:
+                                captcha_detected = True
+                                log_func("🔐 CAPTCHA 감지! 수동으로 풀어주세요.")
+                                log_func("💡 CAPTCHA를 풀면 자동으로 다음 단계로 진행됩니다.")
+                        except:
+                            pass
+                    
+                    # 로그인 상태 확인
+                    cookies = {cookie.get("name") for cookie in driver.get_cookies()}
+                    if {"NID_SES", "NID_AUT", "NID_JKL"}.intersection(cookies):
+                        login_success = True
+                        if captcha_detected:
+                            log_func("✅ CAPTCHA 통과! 로그인 완료")
+                        break
+                    
+                    # 진행 상황 알림 (초고속 모드에서는 최소화)
+                    if attempt % 3 == 0 and attempt > 0:  # 9초마다
+                        elapsed = (attempt + 1) * 3
+                        if captcha_detected:
+                            log_func(f"  ⏰ CAPTCHA ({elapsed}초)")
+                        
+                except WebDriverException:
+                    log_func("❌ 브라우저 연결이 끊어졌습니다.")
+                    break
+                except Exception as e:
+                    log_func(f"⚠️ 로그인 확인 중 오류: {e}")
+                    continue
+            
+            if login_success:
+                log_func(f"✅ '{account_id}' OK")
+                self._mark_account_logged_in(account_id)
+                try:
+                    driver.quit()
+                    self._non_blocking_wait_ms(500)  # 초고속: 1초 → 0.5초
+                except:
+                    pass
+                self._driver = None
+                return "success"
+            else:
+                # 타임아웃 시에도 쿠키 재확인
+                try:
+                    cookies = {cookie.get("name") for cookie in driver.get_cookies()}
+                    if {"NID_SES", "NID_AUT", "NID_JKL"}.intersection(cookies):
+                        log_func(f"✅ '{account_id}' OK (최종확인)")
+                        self._mark_account_logged_in(account_id)
+                        try:
+                            driver.quit()
+                            self._non_blocking_wait_ms(500)
+                        except:
+                            pass
+                        self._driver = None
+                        return "success"
+                except:
+                    pass
+                
+                log_func(f"❌ '{account_id}' 실패 (30초 초과)")
+                try:
+                    driver.quit()
+                    self._non_blocking_wait_ms(500)
+                except:
+                    pass
+                self._driver = None
+                return "타임아웃"
+                
+        except Exception as exc:
+            error_msg = str(exc)[:50]
+            log_func(f"❌ '{account_id}' 계정 로그인 중 오류 발생: {error_msg}")
+            
+            # 브라우저 정리
+            try:
+                if self._driver:
+                    self._driver.quit()
+                    self._non_blocking_wait_ms(1000)
+            except:
+                pass
+            self._driver = None
+            
+            return error_msg
 
     def _cleanup_browser_sessions(self) -> None:
         """브라우저 세션 정리를 수행합니다 (로그인 세션 보존)."""
