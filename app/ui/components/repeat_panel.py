@@ -1,14 +1,31 @@
 """3개 섹션으로 구분된 로그 영역."""
 
+import re
 from typing import Optional
 
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 
 class RepeatPanel(QtWidgets.QWidget):
+    # 정규식을 클래스 수준에서 미리 컴파일 (성능 최적화)
+    _LOG_LEVEL_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} - (INFO|DEBUG|ERROR|WARNING) - ')
+    
+    # 스크롤 업데이트 최소 간격 (밀리초)
+    _SCROLL_UPDATE_INTERVAL_MS = 100
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
+        
+        # 성능 최적화를 위한 스크롤 업데이트 제어
+        self._last_scroll_update = 0
+        self._scroll_timer = QtCore.QTimer()
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.timeout.connect(self._update_scroll_delayed)
+        
+        # 진행률 업데이트 캐시
+        self._last_progress_value = 0
+        self._last_step_text = ""
+        
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -79,30 +96,30 @@ class RepeatPanel(QtWidgets.QWidget):
         # 로그 메시지 형식 정리 (INFO 레벨 제거, 시간과 내용만 표시)
         formatted_message = self._format_log_message(message)
         self.log_view.appendPlainText(formatted_message)
-        scrollbar = self.log_view.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        
+        # 스크롤 업데이트 최적화 - 일정 간격으로만 실행
+        self._schedule_scroll_update()
         
         # 로그 메시지에 따라 진행률 업데이트
         self._update_progress_from_log(message)
 
     def _format_log_message(self, message: str) -> str:
         """로그 메시지를 사용자 친화적 형식으로 변환합니다."""
-        import re
         from datetime import datetime
         
-        # INFO, DEBUG, ERROR 등의 로그 레벨 제거
-        message = re.sub(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} - (INFO|DEBUG|ERROR|WARNING) - ', '', message)
+        # 미리 컴파일된 정규식 사용 (성능 최적화)
+        message = self._LOG_LEVEL_PATTERN.sub('', message)
         
-        # 현재 시간 추가
+        # 현재 시간 추가 (형식 단순화로 성능 최적화)
         current_time = datetime.now().strftime("%H:%M:%S")
         
-        # 완료/진행 상태에 따라 아이콘 추가
-        if "(완료)" in message:
+        # 아이콘 선택 최적화 - 조건 순서 조정
+        if "완료" in message or "성공" in message:
             icon = "✅"
-        elif "(진행 중)" in message:
-            icon = "🔄"
-        elif "오류" in message or "실패" in message:
+        elif "오류" in message or "실패" in message or "❌" in message:
             icon = "❌"
+        elif "진행" in message:
+            icon = "🔄"
         elif "시작" in message:
             icon = "🚀"
         else:
@@ -113,8 +130,7 @@ class RepeatPanel(QtWidgets.QWidget):
     def update_status(self, status: str) -> None:
         """자동화 진행 상태를 업데이트합니다."""
         self.status_view.setPlainText(f"상태: {status}")
-        scrollbar = self.status_view.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # 상태 뷰는 짧은 텍스트이므로 스크롤 업데이트 최적화 생략
 
     def _update_progress_from_log(self, message: str) -> None:
         """로그 메시지를 분석하여 진행률을 업데이트합니다."""
@@ -160,17 +176,23 @@ class RepeatPanel(QtWidgets.QWidget):
             "포스팅 완료": (100, "포스팅 완료")
         }
         
-        # 현재는 수동 모드만 구현
+        # 현재는 수동 모드만 구현 - 진행률 업데이트 최적화
         for keyword, (progress, step_name) in manual_steps.items():
             if keyword in message:
-                self.progress_bar.setValue(progress)
-                self.current_step_label.setText(f"현재 단계: {step_name}")
-                
-                # 진행률에 따른 추가 정보 표시
-                if progress == 100:
-                    self.status_view.setPlainText("✅ 자동화가 성공적으로 완료되었습니다!")
-                else:
-                    self.status_view.setPlainText(f"진행 중... {step_name} ({progress}%)")
+                # 같은 진행률로 중복 업데이트 방지
+                if progress != self._last_progress_value or step_name != self._last_step_text:
+                    self.progress_bar.setValue(progress)
+                    self.current_step_label.setText(f"현재 단계: {step_name}")
+                    
+                    # 진행률에 따른 추가 정보 표시
+                    if progress == 100:
+                        self.status_view.setPlainText("✅ 자동화가 성공적으로 완료되었습니다!")
+                    else:
+                        self.status_view.setPlainText(f"진행 중... {step_name} ({progress}%)")
+                    
+                    # 캐시 업데이트
+                    self._last_progress_value = progress
+                    self._last_step_text = step_name
                 break
 
     def reset_progress(self) -> None:
@@ -178,6 +200,10 @@ class RepeatPanel(QtWidgets.QWidget):
         self.progress_bar.setValue(0)
         self.current_step_label.setText("상태: 대기 중")
         self.status_view.setPlainText("자동화를 시작하려면 시작 버튼을 클릭하세요.")
+        
+        # 캐시 초기화
+        self._last_progress_value = 0
+        self._last_step_text = ""
 
     def set_error_state(self, error_message: str) -> None:
         """오류 상태로 설정합니다."""
@@ -196,6 +222,17 @@ class RepeatPanel(QtWidgets.QWidget):
         
         self.history_list.addItem(item)
 
+    def _schedule_scroll_update(self) -> None:
+        """스크롤 업데이트를 예약합니다. (성능 최적화)"""
+        if not self._scroll_timer.isActive():
+            self._scroll_timer.start(self._SCROLL_UPDATE_INTERVAL_MS)
+    
+    def _update_scroll_delayed(self) -> None:
+        """지연된 스크롤 업데이트를 실행합니다."""
+        scrollbar = self.log_view.verticalScrollBar()
+        if scrollbar.value() < scrollbar.maximum():
+            scrollbar.setValue(scrollbar.maximum())
+
     def _on_post_double_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         """게시물 더블클릭 시 브라우저에서 열기"""
         import webbrowser
@@ -203,7 +240,8 @@ class RepeatPanel(QtWidgets.QWidget):
         url = item.data(QtCore.Qt.UserRole)
         if url:
             try:
-                webbrowser.open(url)
+                # 백그라운드에서 브라우저 열기 (비블로킹)
+                QtCore.QTimer.singleShot(0, lambda: webbrowser.open(url))
                 self.append_log(f"🌐 게시물 열기: {item.text()}")
             except Exception as e:
                 self.append_log(f"❌ 게시물 열기 실패: {str(e)}")

@@ -99,6 +99,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # UI 스케일링 상태
         self._ui_scale: float = 1.0
         self._theme_map_cache: Optional[Dict[str, object]] = None
+        
+        # 리사이즈 이벤트 최적화용 타이머
+        self._resize_timer = QtCore.QTimer()
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._apply_resize_changes)
+        
+        # 스타일시트 캐시
+        self._original_qss: Optional[str] = None
 
         # 애플리케이션 리소스 경로(고정)와 사용자 데이터 경로(가변)를 분리
         self.app_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
@@ -1413,7 +1421,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         # Cache original QSS so scaling does not accumulate
-        if not hasattr(self, "_original_qss") or not self._original_qss:
+        if self._original_qss is None:
             self._original_qss = style_path.read_text(encoding="utf-8")
         qss = self._original_qss
         replacements = {
@@ -1454,44 +1462,56 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.instance().setStyleSheet(qss)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
-        # 창 크기에 따라 UI 스케일 계산 (기준: 1400x900)
+        # 리사이즈 이벤트 최적화 - 타이머로 지연 처리
+        if not self._resize_timer.isActive():
+            self._resize_timer.start(150)  # 150ms 지연
+        super().resizeEvent(event)
+    
+    def _apply_resize_changes(self) -> None:
+        """리사이즈 변경사항을 지연 적용 (성능 최적화)"""
         try:
             width = max(1, self.width())
             height = max(1, self.height())
             
-            # 화면 크기에 따른 기준 크기 동적 조정
-            screen = QtWidgets.QApplication.primaryScreen()
-            if screen:
-                screen_width = screen.availableGeometry().width()
-                if screen_width <= 1366:
-                    base_width, base_height = 1200, 800
-                elif screen_width <= 1920:
-                    base_width, base_height = 1400, 900
+            # 화면 크기에 따른 기준 크기 동적 조정 (캐시 활용)
+            if not hasattr(self, '_base_size_cache'):
+                screen = QtWidgets.QApplication.primaryScreen()
+                if screen:
+                    screen_width = screen.availableGeometry().width()
+                    if screen_width <= 1366:
+                        self._base_size_cache = (1200, 800)
+                    elif screen_width <= 1920:
+                        self._base_size_cache = (1400, 900)
+                    else:
+                        self._base_size_cache = (1600, 1000)
                 else:
-                    base_width, base_height = 1600, 1000
-            else:
-                base_width, base_height = 1400, 900
+                    self._base_size_cache = (1400, 900)
             
+            base_width, base_height = self._base_size_cache
             scale_w = width / base_width
             scale_h = height / base_height
-            new_scale = max(0.8, min(1.5, min(scale_w, scale_h)))  # 스케일 범위 조정
+            new_scale = max(0.8, min(1.5, min(scale_w, scale_h)))
             
-            if abs(new_scale - self._ui_scale) > 0.05:
+            # 스케일 변화가 충분히 클 때만 업데이트
+            if abs(new_scale - self._ui_scale) > 0.08:  # 임계값 증가로 빈도 감소
                 self._ui_scale = new_scale
                 if self._theme_map_cache:
                     self._load_stylesheet(self._theme_map_cache)
         except Exception:
             pass
-        super().resizeEvent(event)
 
     def _non_blocking_wait_ms(self, ms: int) -> None:
-        # UI 이벤트를 처리하면서 대기
+        # UI 이벤트를 처리하면서 대기 (성능 최적화)
         try:
             from PyQt5 import QtTest  # type: ignore
-            QtWidgets.QApplication.processEvents()
+            # processEvents 호출을 최소화
+            if ms > 100:
+                QtWidgets.QApplication.processEvents()
             QtTest.QTest.qWait(max(0, int(ms)))
         except Exception:
-            QtWidgets.QApplication.processEvents()
+            # fallback에서도 processEvents 호출 최소화
+            if ms > 100:
+                QtWidgets.QApplication.processEvents()
 
     def _show_tips(self) -> None:
         QtWidgets.QMessageBox.information(

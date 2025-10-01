@@ -98,20 +98,30 @@ def load_accounts(db_path: Path, profiles_root: Path) -> dict[str, AccountProfil
 def save_accounts(db_path: Path, accounts: Iterable[AccountProfile]) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     _initialise_db(db_path)
+    
+    # 계정 리스트를 미리 생성 (성능 최적화)
+    account_data = [
+        (account.account_id, account.password, int(account.login_initialized))
+        for account in accounts
+    ]
 
     with sqlite3.connect(db_path) as conn:
-        conn.execute("DELETE FROM accounts")
-        conn.executemany(
-            """
-            INSERT INTO accounts (account_id, password, login_initialized)
-            VALUES (?, ?, ?)
-            """,
-            [
-                (account.account_id, account.password, int(account.login_initialized))
-                for account in accounts
-            ],
-        )
-        conn.commit()
+        # 트랜잭션 시작
+        conn.execute("BEGIN TRANSACTION")
+        try:
+            conn.execute("DELETE FROM accounts")
+            if account_data:  # 빈 리스트 체크
+                conn.executemany(
+                    """
+                    INSERT INTO accounts (account_id, password, login_initialized)
+                    VALUES (?, ?, ?)
+                    """,
+                    account_data,
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def sanitize_account_id(account_id: str) -> str:

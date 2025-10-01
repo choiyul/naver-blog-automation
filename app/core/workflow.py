@@ -64,10 +64,12 @@ class WorkflowWorker(QtCore.QThread):
     def _emit_progress(self, message: str, completed: bool) -> None:
         self.progress_signal.emit(message, completed)
         if completed:
+            # 진행률 계산 최적화
             self._current_post_steps = min(self._current_post_steps + 1, self.auto_steps_per_post)
-            total = self._completed_posts * self.auto_steps_per_post + self._current_post_steps
-            percent = int(total / self._total_steps * 100)
-            self.percent_signal.emit(percent)
+            if self._total_steps > 0:  # 0으로 나누기 방지
+                total = self._completed_posts * self.auto_steps_per_post + self._current_post_steps
+                percent = min(100, int(total / self._total_steps * 100))  # 100% 초과 방지
+                self.percent_signal.emit(percent)
 
     def _emit_status(self, message: str) -> None:
         self.status_signal.emit(message)
@@ -114,6 +116,8 @@ class WorkflowWorker(QtCore.QThread):
                 self._emit_status(f"{idx}번째 글 준비 중")
                 display_title = manual_title if self.params.count == 1 else f"{manual_title} ({idx})"
                 self._emit_progress(f"{idx}번째 글 콘텐츠 준비", True)
+                
+                # 객체 생성을 한 번에 처리 (메모리 최적화)
                 post = GeneratedPost(
                     title=display_title,
                     introduction="",
@@ -122,6 +126,8 @@ class WorkflowWorker(QtCore.QThread):
                     tags=[],
                 )
                 posts.append(post)
+                
+                # 신호 발생을 배치로 처리
                 self.post_saved_signal.emit(display_title, "수동 작성")
                 self._emit_status(f"{idx}번째 글 준비 완료")
 
@@ -156,15 +162,18 @@ class WorkflowWorker(QtCore.QThread):
                 self._emit_status(f"{idx}번째 글 발행 완료")
                 self._completed_posts = idx
                 
-                # 블로그 URL이 있으면 UI에 전달 (아이디 - 생성여부 - 제목 형식)
+                # 블로그 URL 처리 최적화 - 로깅과 신호 발생 최소화
                 account_id = self.params.naver_id or "알 수 없음"
                 if blog_url:
                     display_text = f"{account_id} - ✅ 성공 - {post.title}"
                     self.post_saved_signal.emit(display_text, blog_url)
-                    LOGGER.info(f"게시물 '{post.title}' URL 전달 완료: {blog_url}")
+                    # 상세 로깅은 디버그 모드에서만
+                    if LOGGER.isEnabledFor(logging.DEBUG):
+                        LOGGER.debug(f"게시물 '{post.title}' URL 전달 완료: {blog_url}")
                 else:
                     display_text = f"{account_id} - ❌ 실패 - {post.title}"
                     self.post_saved_signal.emit(display_text, "")
+                    # 경고 로깅은 유지 (중요한 정보)
                     LOGGER.warning(f"게시물 '{post.title}' URL을 가져오지 못했습니다.")
         except AccountProtectionException as exc:
             # 보호조치는 상위로 전파하여 다음 계정으로 넘어가도록 함

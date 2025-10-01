@@ -20,6 +20,10 @@ class HeaderBar(QtWidgets.QWidget):
         super().__init__(parent)
         self._toggle_theme = toggle_theme
         self._toggle_mode = toggle_mode
+        
+        # 아이콘 캐시 (성능 최적화)
+        self._icon_cache: Dict[str, QtGui.QIcon] = {}
+        
         self._build_ui()  # UI 구성 호출
 
     def _build_ui(self) -> None:
@@ -72,6 +76,11 @@ class HeaderBar(QtWidgets.QWidget):
         self._show_notification("🌙", "테마 변경", "테마가 변경되었습니다.")
 
     def _show_notification(self, icon: str, title: str, message: str) -> None:
+        # 알림을 비동기적으로 표시 (성능 최적화)
+        QtCore.QTimer.singleShot(0, lambda: self._show_notification_delayed(icon, title, message))
+    
+    def _show_notification_delayed(self, icon: str, title: str, message: str) -> None:
+        """지연된 알림 표시 (UI 블로킹 방지)"""
         dialog = QtWidgets.QDialog(self.window())
         dialog.setWindowFlags(
             QtCore.Qt.Dialog
@@ -135,8 +144,15 @@ class HeaderBar(QtWidgets.QWidget):
         color_active = str(theme_map.get("theme_icon_active", "#0c111c"))
         color_inactive = str(theme_map.get("theme_icon", "#0f172a"))
         color = color_active if is_dark else color_inactive
-        icon = self._create_moon_icon(color) if is_dark else self._create_sun_icon(color)
-        self.theme_button.setIcon(icon)
+        
+        # 캐시된 아이콘 사용 (성능 최적화)
+        icon_key = f"{'moon' if is_dark else 'sun'}_{color}"
+        if icon_key not in self._icon_cache:
+            self._icon_cache[icon_key] = (
+                self._create_moon_icon(color) if is_dark else self._create_sun_icon(color)
+            )
+        
+        self.theme_button.setIcon(self._icon_cache[icon_key])
         self.theme_button.setText("")
         self.theme_button.blockSignals(False)
 

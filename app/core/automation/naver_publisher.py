@@ -487,19 +487,19 @@ def _write_blog_post(
     title_element = _focus_title_area(driver)
     _type_text(title_element, content.title)
     _report(progress_callback, "제목 입력 완료", True)
-    time.sleep(1)  # 제목 입력 후 안정화 대기
+    time.sleep(0.5)  # 제목 입력 후 안정화 대기 (최적화)
 
     # 이미지가 있는 경우 무조건 본문 작성 전에 먼저 삽입
     if image_file_path:
         _report(progress_callback, "이미지 삽입 중 (본문 상단)", False)
         _insert_image(driver, image_file_path, progress_callback, stop_callback)
-        time.sleep(2)  # 이미지 삽입 후 안정화 대기
+        time.sleep(1)  # 이미지 삽입 후 안정화 대기 (최적화)
 
     body_element = _focus_body_area(driver)
     body_text = _combine_body(content)
     _type_text(body_element, body_text, fast_mode)
     _report(progress_callback, "본문 입력 완료", True)
-    time.sleep(1)  # 본문 입력 후 안정화 대기
+    time.sleep(0.5)  # 본문 입력 후 안정화 대기 (최적화)
 
 
 def _insert_image(

@@ -81,10 +81,13 @@ class ContentGenerator:
 
     def _request_response(self, prompt: str) -> str:
         try:
-            response = self.client.responses.create(
+            response = self.client.chat.completions.create(
                 model=self.model,
                 temperature=TEMPERATURE,
-                input=prompt,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=2048,  # 토큰 제한 추가
             )
         except OpenAIRateLimitError as exc:
             raise RuntimeError(
@@ -92,7 +95,12 @@ class ContentGenerator:
             ) from exc
         except OpenAIAPIError as exc:
             raise RuntimeError(f"OpenAI API 오류가 발생했습니다: {exc}") from exc
-        return response.output_text.strip()
+        
+        # 응답 처리
+        if response.choices and len(response.choices) > 0:
+            return response.choices[0].message.content.strip()
+        else:
+            raise RuntimeError("OpenAI API에서 유효한 응답을 받지 못했습니다.")
 
     def _build_post(self, keyword: str, parts: dict[str, str]) -> GeneratedPost:
         tags_line = parts["태그"].replace(",", " ")
