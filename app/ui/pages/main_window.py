@@ -207,6 +207,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.account_panel.account_selected.connect(self._on_account_selected)
         self.account_panel.request_add_account.connect(self._on_add_account)
         self.account_panel.request_remove_account.connect(self._on_remove_account)
+        self.account_panel.request_remove_accounts.connect(self._on_remove_accounts)
         self.account_panel.request_open_profile.connect(self._open_profile_dir)
         self.account_panel.request_open_browser.connect(self._open_browser_for_account)
 
@@ -401,6 +402,14 @@ class MainWindow(QtWidgets.QMainWindow):
         ) != QtWidgets.QMessageBox.Yes:
             return
         self._accounts.pop(account_id, None)
+        self._save_accounts()
+        next_id = next(iter(self._accounts)) if self._accounts else None
+        self._refresh_accounts_ui(next_id)
+    
+    def _on_remove_accounts(self, account_ids: list[str]) -> None:
+        """여러 계정을 한 번에 삭제 (이미 확인을 받았음)"""
+        for account_id in account_ids:
+            self._accounts.pop(account_id, None)
         self._save_accounts()
         next_id = next(iter(self._accounts)) if self._accounts else None
         self._refresh_accounts_ui(next_id)
@@ -1199,31 +1208,51 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.warning(self, "입력 오류", "본문 파일을 선택해 주세요.")
                 return
 
+        # 체크된 계정 목록 확인
+        checked_accounts = self.account_panel.get_checked_accounts()
+        
         # 로그인된 계정 목록 확인
         logged_in_accounts = [account_id for account_id, account in self._accounts.items() 
                             if account.login_initialized]
         
-        if not logged_in_accounts:
-            QtWidgets.QMessageBox.warning(self, "계정 없음", 
-                "로그인된 계정이 없습니다.\n먼저 계정을 추가하고 로그인을 완료해주세요.")
-            return
-
-        # 다중 계정 처리 확인
-        if len(logged_in_accounts) > 1:
-            reply = QtWidgets.QMessageBox.question(
-                self, "다중 계정 워크플로우", 
-                f"로그인된 {len(logged_in_accounts)}개의 계정이 있습니다.\n"
-                f"모든 계정에서 순서대로 자동 발행하시겠습니까?\n\n"
-                f"계정 목록: {', '.join(logged_in_accounts)}",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                QtWidgets.QMessageBox.Yes
-            )
-            
-            if reply == QtWidgets.QMessageBox.No:
+        # 체크된 계정이 있으면 우선 사용, 없으면 로그인된 모든 계정 사용
+        if checked_accounts:
+            # 체크된 계정 중 로그인된 계정만 필터링
+            target_accounts = [acc_id for acc_id in checked_accounts if acc_id in logged_in_accounts]
+            if not target_accounts:
+                QtWidgets.QMessageBox.warning(self, "계정 없음", 
+                    "체크된 계정 중 로그인된 계정이 없습니다.\n먼저 로그인을 완료해주세요.")
                 return
+            self._log(f"✅ 체크된 {len(target_accounts)}개 계정을 순환하며 자동 발행합니다.")
+        else:
+            # 체크된 계정이 없으면 로그인된 모든 계정 사용
+            target_accounts = logged_in_accounts
+            if not target_accounts:
+                QtWidgets.QMessageBox.warning(self, "계정 없음", 
+                    "로그인된 계정이 없습니다.\n먼저 계정을 추가하고 로그인을 완료해주세요.")
+                return
+            
+            # 다중 계정 처리 확인
+            if len(target_accounts) > 1:
+                reply = QtWidgets.QMessageBox.question(
+                    self, "다중 계정 워크플로우", 
+                    f"로그인된 {len(target_accounts)}개의 계정이 있습니다.\n"
+                    f"모든 계정에서 순서대로 자동 발행하시겠습니까?\n\n"
+                    f"계정 목록: {', '.join(target_accounts)}\n\n"
+                    f"💡 팁: 특정 계정만 반복 실행하려면 계정 체크박스를 선택하세요.",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.Yes
+                )
+                
+                if reply == QtWidgets.QMessageBox.No:
+                    return
+            
+            self._log(f"📝 워크플로우 시작: {len(target_accounts)}개 계정에서 자동 발행을 시작합니다.")
 
-        self._log(f"📝 워크플로우 시작: {len(logged_in_accounts)}개 계정에서 자동 발행을 시작합니다.")
-        self._log(f"🔗 계정 순서: {' → '.join(logged_in_accounts)}")
+        # 항상 무한 반복 모드
+        use_infinite_loop = True
+        self._log(f"🔄 무한 반복 모드: 마지막 계정 후 다시 첫 번째 계정부터 시작합니다.")
+        self._log(f"🔗 계정 순서: {' → '.join(target_accounts)}")
 
         params = self._collect_params()
         self.repeat_panel.history_list.clear()
@@ -1235,11 +1264,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # 다중 계정 워크플로우 워커 시작
         self._worker = MultiAccountWorkflowWorker(
             params,
-            logged_in_accounts,
+            target_accounts,
             self._accounts,
             self._driver,
             base_dir=self.base_dir,
             automation_steps_per_post=AUTOMATION_STEPS_PER_POST,
+            infinite_loop=use_infinite_loop,
         )
         self._worker.finished_signal.connect(self._on_workflow_finished)
         self._worker.error_signal.connect(self._on_workflow_error)
@@ -1359,6 +1389,9 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.instance().setPalette(palette)
         self._load_stylesheet(theme_map)
         self.header.set_theme_icon(theme_map, theme == "dark")
+        
+        # 계정 패널 테마 적용
+        self.account_panel.set_theme(theme)
 
     def _load_stylesheet(self, theme_map: Dict[str, object]) -> None:
         # 테마 맵 캐시 (리사이즈 시 재적용)
@@ -1473,6 +1506,7 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
         driver: Optional[object],
         base_dir,
         automation_steps_per_post: int,
+        infinite_loop: bool = False,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -1482,6 +1516,7 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
         self.driver = driver
         self.base_dir = base_dir
         self.auto_steps_per_post = automation_steps_per_post
+        self.infinite_loop = infinite_loop
         self._stop_requested = False
         self.total_accounts = len(account_ids)
 
@@ -1496,83 +1531,108 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
         import time
         
         try:
-            for index, account_id in enumerate(self.account_ids, 1):
+            cycle_count = 0  # 순환 횟수
+            
+            while True:  # 무한 반복 또는 1회 실행
+                cycle_count += 1
+                
+                if self.infinite_loop and cycle_count > 1:
+                    self.progress_signal.emit(f"🔄 다음 순환 시작 (순환 {cycle_count}회차)", True)
+                
+                for index, account_id in enumerate(self.account_ids, 1):
+                    if self._should_stop():
+                        break
+                    
+                    # 계정 전환 신호 발생
+                    self.account_switch_signal.emit(account_id, self.total_accounts, index)
+                    
+                    account = self.accounts[account_id]
+                    if not account.login_initialized:
+                        self.progress_signal.emit(f"❌ '{account_id}' 계정이 로그인되지 않았습니다. 건너뜁니다.", True)
+                        continue
+
+                    # 계정별 워크플로우 파라미터 업데이트
+                    account_params = WorkflowParams(
+                        keyword=self.params.keyword,
+                        count=self.params.count,
+                        use_ai=self.params.use_ai,
+                        api_key=self.params.api_key,
+                        model=self.params.model,
+                        manual_title=self.params.manual_title,
+                        manual_body=self.params.manual_body,
+                        manual_tags=self.params.manual_tags,
+                        manual_file_path=self.params.manual_file_path,
+                        image_file_path=self.params.image_file_path,
+                        schedule_minutes=self.params.schedule_minutes,
+                        naver_id=account_id,
+                        naver_profile_dir=str(account.profile_dir),
+                    )
+
+                    self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
+                    
+                    # 기존 브라우저가 있으면 닫기
+                    if self.driver:
+                        try:
+                            self.driver.quit()
+                            time.sleep(2)
+                        except:
+                            pass
+                        self.driver = None
+
+                    # 새 브라우저 생성 (계정별 프로필 사용)
+                    try:
+                        self.driver = create_chrome_driver(account.profile_dir)
+                        self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
+                    except Exception as exc:
+                        self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
+                        continue
+
+                    # 계정별 워크플로우 실행
+                    worker = WorkflowWorker(
+                        account_params,
+                        self.driver,
+                        base_dir=self.base_dir,
+                        automation_steps_per_post=self.auto_steps_per_post,
+                    )
+                    
+                    # 워크플로우 신호 연결
+                    worker.progress_signal.connect(self.progress_signal)
+                    worker.post_saved_signal.connect(self.post_saved_signal)
+                    worker.status_signal.connect(self.status_signal)
+                    
+                    # 워크플로우 실행 (동기적으로)
+                    self.progress_signal.emit(f"📝 '{account_id}' 계정에서 글 발행을 시작합니다...", False)
+                    worker.run()  # start() 대신 run() 직접 호출로 동기 실행
+                    
+                    self.progress_signal.emit(f"✅ '{account_id}' 계정 발행 완료!", True)
+                    
+                    # 계정 간 대기 시간 (안정성)
+                    if index < self.total_accounts:  # 마지막 계정이 아니면
+                        self.progress_signal.emit("⏳ 다음 계정 전환을 위해 잠시 대기 중...", False)
+                        time.sleep(3)
+                
+                # for 루프가 끝난 후 (모든 계정 처리 완료)
+                # 무한 반복이 아니면 한 사이클만 실행하고 종료
+                if not self.infinite_loop:
+                    break
+                
+                # 무한 반복 모드에서 중단되었으면 종료
                 if self._should_stop():
                     break
                 
-                # 계정 전환 신호 발생
-                self.account_switch_signal.emit(account_id, self.total_accounts, index)
-                
-                account = self.accounts[account_id]
-                if not account.login_initialized:
-                    self.progress_signal.emit(f"❌ '{account_id}' 계정이 로그인되지 않았습니다. 건너뜁니다.", True)
-                    continue
-
-                # 계정별 워크플로우 파라미터 업데이트
-                account_params = WorkflowParams(
-                    keyword=self.params.keyword,
-                    count=self.params.count,
-                    use_ai=self.params.use_ai,
-                    api_key=self.params.api_key,
-                    model=self.params.model,
-                    manual_title=self.params.manual_title,
-                    manual_body=self.params.manual_body,
-                    manual_tags=self.params.manual_tags,
-                    manual_file_path=self.params.manual_file_path,
-                    image_file_path=self.params.image_file_path,
-                    schedule_minutes=self.params.schedule_minutes,
-                    naver_id=account_id,
-                    naver_profile_dir=str(account.profile_dir),
-                )
-
-                self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
-                
-                # 기존 브라우저가 있으면 닫기
-                if self.driver:
-                    try:
-                        self.driver.quit()
-                        time.sleep(2)
-                    except:
-                        pass
-                    self.driver = None
-
-                # 새 브라우저 생성 (계정별 프로필 사용)
-                try:
-                    self.driver = create_chrome_driver(account.profile_dir)
-                    self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
-                except Exception as exc:
-                    self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
-                    continue
-
-                # 계정별 워크플로우 실행
-                worker = WorkflowWorker(
-                    account_params,
-                    self.driver,
-                    base_dir=self.base_dir,
-                    automation_steps_per_post=self.auto_steps_per_post,
-                )
-                
-                # 워크플로우 신호 연결
-                worker.progress_signal.connect(self.progress_signal)
-                worker.post_saved_signal.connect(self.post_saved_signal)
-                worker.status_signal.connect(self.status_signal)
-                
-                # 워크플로우 실행 (동기적으로)
-                self.progress_signal.emit(f"📝 '{account_id}' 계정에서 글 발행을 시작합니다...", False)
-                worker.run()  # start() 대신 run() 직접 호출로 동기 실행
-                
-                self.progress_signal.emit(f"✅ '{account_id}' 계정 발행 완료!", True)
-                
-                # 계정 간 대기 시간 (안정성)
-                if index < self.total_accounts:  # 마지막 계정이 아니면
-                    self.progress_signal.emit("⏳ 다음 계정 전환을 위해 잠시 대기 중...", False)
-                    time.sleep(3)
+                # 다음 순환 전 대기
+                if self.infinite_loop:
+                    self.progress_signal.emit("⏳ 다음 순환을 위해 잠시 대기 중...", False)
+                    time.sleep(5)
 
         except Exception as exc:
             self.error_signal.emit(f"다중 계정 워크플로우 오류: {exc}")
             return
 
-        self.progress_signal.emit("🎉 모든 계정에서 발행이 완료되었습니다!", True)
+        if self.infinite_loop:
+            self.progress_signal.emit("🛑 무한 반복 모드가 중단되었습니다.", True)
+        else:
+            self.progress_signal.emit("🎉 모든 계정에서 발행이 완료되었습니다!", True)
         self.finished_signal.emit(self.driver)
 
 

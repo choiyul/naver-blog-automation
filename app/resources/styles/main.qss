@@ -426,6 +426,39 @@ QListWidget::item:selected {
     color: #ffffff;
 }
 
+/* 테이블 위젯 스타일 */
+QTableWidget {
+    background-color: transparent;
+    border: none;
+    gridline-color: transparent;
+}
+
+QTableWidget::item {
+    padding: 12px 8px;
+    border: none;
+    color: {{PRIMARY}};
+}
+
+QTableWidget::item:selected {
+    background-color: transparent;
+    outline: none;
+}
+
+QTableWidget::item:hover {
+    background-color: rgba(148, 163, 184, 0.08);
+    border-radius: 6px;
+}
+
+QHeaderView::section {
+    background-color: transparent;
+    color: {{SECONDARY}};
+    padding: 10px 8px;
+    border: none;
+    border-bottom: 1px solid {{BORDER}};
+    font-weight: 600;
+    font-size: 13px;
+}
+
 QLabel#appTitle {
     font-size: 28px;
     font-weight: 700;
