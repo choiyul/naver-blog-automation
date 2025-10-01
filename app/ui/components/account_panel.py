@@ -18,7 +18,19 @@ class _AccountItemDelegate(QtWidgets.QStyledItemDelegate):
         style = opt.widget.style() if opt.widget else QtWidgets.QApplication.style()
         style.drawControl(QtWidgets.QStyle.CE_ItemViewItem, opt, painter, opt.widget)
 
-        rect = opt.rect.adjusted(16, 0, -16, 0)
+        # 체크박스 영역
+        checkbox_rect = QtCore.QRect(opt.rect.left() + 16, opt.rect.top() + 10, 20, 20)
+        checkbox_opt = QtWidgets.QStyleOptionButton()
+        checkbox_opt.rect = checkbox_rect
+        checkbox_opt.state = QtWidgets.QStyle.State_Enabled
+        if index.data(QtCore.Qt.CheckStateRole) == QtCore.Qt.Checked:
+            checkbox_opt.state |= QtWidgets.QStyle.State_On
+        else:
+            checkbox_opt.state |= QtWidgets.QStyle.State_Off
+        style.drawControl(QtWidgets.QStyle.CE_CheckBox, checkbox_opt, painter, opt.widget)
+
+        # 텍스트 영역 (체크박스 오른쪽부터 시작)
+        rect = opt.rect.adjusted(48, 0, -16, 0)
         account_id = index.data(QtCore.Qt.DisplayRole) or ""
         is_logged_in = bool(index.data(QtCore.Qt.UserRole + 1))
 
@@ -42,6 +54,16 @@ class _AccountItemDelegate(QtWidgets.QStyledItemDelegate):
 
     def sizeHint(self, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> QtCore.QSize:
         return QtCore.QSize(option.rect.width(), 40)
+    
+    def editorEvent(self, event: QtCore.QEvent, model: QtCore.QAbstractItemModel, option: QtWidgets.QStyleOptionViewItem, index: QtCore.QModelIndex) -> bool:
+        if event.type() == QtCore.QEvent.MouseButtonRelease:
+            checkbox_rect = QtCore.QRect(option.rect.left() + 16, option.rect.top() + 10, 20, 20)
+            if checkbox_rect.contains(event.pos()):
+                current_state = index.data(QtCore.Qt.CheckStateRole)
+                new_state = QtCore.Qt.Unchecked if current_state == QtCore.Qt.Checked else QtCore.Qt.Checked
+                model.setData(index, new_state, QtCore.Qt.CheckStateRole)
+                return True
+        return super().editorEvent(event, model, option, index)
 
 
 class AccountPanel(QtWidgets.QGroupBox):
@@ -78,6 +100,8 @@ class AccountPanel(QtWidgets.QGroupBox):
         self.add_account_btn.clicked.connect(self._on_add_clicked)
         self.remove_account_btn = QtWidgets.QPushButton("계정 삭제")
         self.remove_account_btn.clicked.connect(self._on_remove_clicked)
+        self.remove_selected_btn = QtWidgets.QPushButton("선택 삭제")
+        self.remove_selected_btn.clicked.connect(self._on_remove_selected_clicked)
         self.export_account_btn = QtWidgets.QPushButton("프로필 폴더 열기")
         self.export_account_btn.clicked.connect(self._on_open_profile_clicked)
         self.login_button = QtWidgets.QPushButton("브라우저 열기")
@@ -86,6 +110,7 @@ class AccountPanel(QtWidgets.QGroupBox):
         button_row.setSpacing(12)
         button_row.addWidget(self.add_account_btn)
         button_row.addWidget(self.remove_account_btn)
+        button_row.addWidget(self.remove_selected_btn)
         button_row.addWidget(self.export_account_btn)
         button_row.addWidget(self.login_button)
 
@@ -131,6 +156,31 @@ class AccountPanel(QtWidgets.QGroupBox):
         account = self._current_account()
         if account:
             self.request_remove_account.emit(account.account_id)
+    
+    def _on_remove_selected_clicked(self) -> None:
+        selected_accounts = []
+        for row in range(self.accounts_list.count()):
+            item = self.accounts_list.item(row)
+            if item.checkState() == QtCore.Qt.Checked:
+                account = item.data(QtCore.Qt.UserRole)
+                if account:
+                    selected_accounts.append(account.account_id)
+        
+        if not selected_accounts:
+            QtWidgets.QMessageBox.warning(self, "선택 오류", "삭제할 계정을 선택해주세요.")
+            return
+        
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "계정 삭제 확인",
+            f"{len(selected_accounts)}개의 계정을 삭제하시겠습니까?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        
+        if reply == QtWidgets.QMessageBox.Yes:
+            for account_id in selected_accounts:
+                self.request_remove_account.emit(account_id)
 
     def _on_open_profile_clicked(self) -> None:
         account = self._current_account()
@@ -160,6 +210,8 @@ class AccountPanel(QtWidgets.QGroupBox):
             item = QtWidgets.QListWidgetItem(account.account_id)
             item.setData(QtCore.Qt.UserRole, account)
             item.setData(QtCore.Qt.UserRole + 1, account.login_initialized)
+            item.setCheckState(QtCore.Qt.Unchecked)  # 체크박스 초기 상태 설정
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)  # 체크 가능하도록 설정
             self.accounts_list.addItem(item)
         if self.accounts_list.count() > 0:
             self.select_account(selected_id)
@@ -196,6 +248,7 @@ class AccountPanel(QtWidgets.QGroupBox):
             self.account_pw_edit,
             self.add_account_btn,
             self.remove_account_btn,
+            self.remove_selected_btn,
             self.export_account_btn,
             self.login_button,
             self.accounts_list,
