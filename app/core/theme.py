@@ -23,12 +23,14 @@ DARK_THEME: dict[str, object] = {
     "accent": "#ffc857",
     "accent_hover": "#ffd676",
     "accent_light": "rgba(255, 200, 87, 0.2)",
+    "accent_dark": "#e6b34f",  # 추가
+    "accent_darker": "#d4a03b",  # 추가
     "danger": "#ff6b6b",
     "warning": "#fbbf24",
     "info": "#38bdf8",
     "theme_icon": "#ffc857",
     "theme_icon_active": "#ffc857",
-    "bg_alt": "#1d2336",  # infoCard 배경색 추가
+    "bg_alt": "#1d2336",
 }
 
 
@@ -47,17 +49,19 @@ LIGHT_THEME: dict[str, object] = {
     "input": "#f2f5fb",
     "border": "#e2e8f0",
     "primary_text": "#0f172a",
-    "secondary_text": "#475569",  # 더 진한 회색으로 변경하여 가독성 향상
+    "secondary_text": "#475569",
     "background": "#f8fafc",
     "accent": "#03c75a",
     "accent_hover": "#09d866",
     "accent_light": "rgba(3, 199, 90, 0.1)",
+    "accent_dark": "#02b350",  # 추가
+    "accent_darker": "#029f46",  # 추가
     "danger": "#ef4444",
     "warning": "#f59e0b",
     "info": "#0284c7",
     "theme_icon": "#0f172a",
     "theme_icon_active": "#ffffff",
-    "bg_alt": "#f1f5f9",  # infoCard 배경색 추가
+    "bg_alt": "#f1f5f9",
 }
 
 

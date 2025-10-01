@@ -27,7 +27,7 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --onefile --windowed --name "NaverBlogAutomation" main.py
+          pyinstaller --onefile --windowed --name "NaverBlogAutomation" --add-data "app/resources;app/resources" --hidden-import=PyQt5 --hidden-import=selenium --hidden-import=openai main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

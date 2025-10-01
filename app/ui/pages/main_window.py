@@ -1426,7 +1426,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "{{ACCENT}}": theme_map["accent"],
             "{{ACCENT_HOVER}}": theme_map["accent_hover"],
             "{{ACCENT_LIGHT}}": theme_map["accent_light"],
+            "{{ACCENT_DARK}}": theme_map.get("accent_dark", theme_map["accent"]),
+            "{{ACCENT_DARKER}}": theme_map.get("accent_darker", theme_map["accent"]),
             "{{DANGER}}": theme_map["danger"],
+            "{{BG_ALT}}": theme_map.get("bg_alt", theme_map["card"]),
             "{{THEME_ICON}}": theme_map.get("theme_icon", theme_map["accent"]),
             "{{THEME_ICON_ACTIVE}}": theme_map.get("theme_icon_active", "#0b1120"),
         }
