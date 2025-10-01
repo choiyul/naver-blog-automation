@@ -20,6 +20,7 @@ class UserSettings:
     interval_minutes: int = 60
     image_file_path: str = ""
     schedule_minutes: int = 5
+    schedule_enabled: bool = True  # 예약 발행 기본값: ON
 
 
 def load_settings(file_path: Path) -> UserSettings:

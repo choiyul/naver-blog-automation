@@ -57,6 +57,11 @@ TYPING_DELAY_SECONDS = 0.05
 PUBLISH_DELAY_SECONDS = 2.0
 
 
+class AccountProtectionException(Exception):
+    """계정이 보호조치 상태일 때 발생하는 예외"""
+    pass
+
+
 @dataclass
 class BlogPostContent:
     title: str
@@ -258,6 +263,27 @@ def _report(callback: Optional[Callable[[str, bool], None]], message: str, compl
             LOGGER.debug("Progress callback failed", exc_info=True)
 
 
+def _check_account_protection(driver: webdriver.Chrome, progress_callback: Optional[Callable[[str, bool], None]] = None) -> None:
+    """계정 보호조치 여부를 확인합니다."""
+    try:
+        # 보호조치 버튼 감지
+        protection_buttons = driver.find_elements(
+            By.XPATH, 
+            "//a[contains(@onclick, 'mainSubmit') and contains(@class, 'btn') and contains(text(), '보호조치')]"
+        )
+        
+        if protection_buttons:
+            LOGGER.warning("⚠️ 계정이 보호조치 상태입니다. 이 계정을 건너뜁니다.")
+            _report(progress_callback, "계정 보호조치 감지 - 다음 계정으로 넘어갑니다", True)
+            raise AccountProtectionException("계정이 보호조치 상태입니다.")
+    except AccountProtectionException:
+        raise  # AccountProtectionException은 그대로 전파
+    except Exception as e:
+        # 다른 예외는 무시 (보호조치 확인 실패는 치명적이지 않음)
+        LOGGER.debug(f"보호조치 확인 중 오류 (무시): {e}")
+        pass
+
+
 def _countdown_sleep(
     seconds: int, 
     message: str,
@@ -327,6 +353,9 @@ def _open_blog_write_page(
         _report(progress_callback, "로그인 완료 확인", True)
     else:
         _report(progress_callback, "로그인 상태 확인", True)
+
+    # 보호조치 여부 확인
+    _check_account_protection(driver, progress_callback)
 
     try:
         blog_span = WebDriverWait(driver, 30).until(
@@ -747,6 +776,10 @@ def _handle_publish_popup(
             # 예약 시간 설정 후 DOM 안정화 대기 (중요!)
             time.sleep(2)
             LOGGER.info("예약 시간 설정 후 DOM 안정화 대기 완료")
+        else:
+            # 예약 설정 건너뛰기 (즉시 발행)
+            LOGGER.info("예약 발행 OFF - 즉시 발행 모드")
+            _report(progress_callback, "즉시 발행 모드", True)
             _report(progress_callback, "예약 시간 설정 완료", True)
         
         # 3. 최종 발행 버튼 클릭 (팝업 상태 재확인)
@@ -994,26 +1027,22 @@ def _set_scheduled_time(driver: webdriver.Chrome, schedule_minutes: int, page_op
         # 한국 시간 기준으로 예약 시간 계산
         korea_tz = pytz.timezone('Asia/Seoul')
         
-        # 기준 시간 결정 (항상 현재 시간 기준으로 정확한 계산)
-        current_time = datetime.now()
+        # 기준 시간 결정 (항상 현재 시간 기준으로 정확한 계산) - timezone-aware로 변환
+        current_time_naive = datetime.now()
+        current_time = korea_tz.localize(current_time_naive)
         
         # 예약 시간이 과거가 되지 않도록 현재 시간을 기준으로 계산
         base_time = current_time
         
         # 정확한 시간 정보 로그
         if page_open_time:
-            time_since_page_open = (current_time - page_open_time).total_seconds()
+            page_open_time_aware = korea_tz.localize(page_open_time) if page_open_time.tzinfo is None else page_open_time
+            time_since_page_open = (current_time - page_open_time_aware).total_seconds()
             LOGGER.info(f"📄 글쓰기 페이지 열린 시간: {page_open_time.strftime('%H:%M:%S')}")
             LOGGER.info(f"🕐 현재 시간: {current_time.strftime('%H:%M:%S')} (페이지 열린 후 {time_since_page_open:.1f}초)")
             LOGGER.info(f"⏰ 예약 시간 계산 기준: 현재 시간 ({current_time.strftime('%H:%M:%S')})")
         else:
             LOGGER.info(f"⏰ 예약 시간 계산 기준: 현재 시간 ({current_time.strftime('%H:%M:%S')})")
-        
-        # 한국 시간으로 변환
-        if base_time.tzinfo is None:
-            base_time = korea_tz.localize(base_time)
-        else:
-            base_time = base_time.astimezone(korea_tz)
         
         # 예약 시간 계산 및 검증
         target_time = base_time + timedelta(minutes=schedule_minutes)

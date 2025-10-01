@@ -293,6 +293,7 @@ class ManualModePanel(QtWidgets.QGroupBox):
     file_selected = QtCore.pyqtSignal(Path)
     image_selected = QtCore.pyqtSignal(Path)
     schedule_changed = QtCore.pyqtSignal(int)
+    schedule_enabled = QtCore.pyqtSignal(bool)
     repeat_toggled = QtCore.pyqtSignal(bool)
     interval_changed = QtCore.pyqtSignal(int)
 
@@ -376,10 +377,19 @@ class ManualModePanel(QtWidgets.QGroupBox):
         schedule_container = QtWidgets.QHBoxLayout()
         schedule_container.setSpacing(8)
         
-        schedule_label = QtWidgets.QLabel("예약 간격:")
+        schedule_label = QtWidgets.QLabel("예약 발행:")
         schedule_label.setMinimumSize(65, 26)
         schedule_label.setAlignment(QtCore.Qt.AlignVCenter)
         schedule_container.addWidget(schedule_label)
+        
+        # 예약 ON/OFF 버튼
+        self.schedule_toggle_btn = QtWidgets.QPushButton("ON")
+        self.schedule_toggle_btn.setObjectName("scheduleButton")
+        self.schedule_toggle_btn.setMinimumSize(42, 26)
+        self.schedule_toggle_btn.setCheckable(True)
+        self.schedule_toggle_btn.setChecked(True)  # 기본값: ON
+        self.schedule_toggle_btn.clicked.connect(self._toggle_schedule)
+        schedule_container.addWidget(self.schedule_toggle_btn)
         
         # 현재 값 표시
         self.schedule_value_label = QtWidgets.QLabel("5")
@@ -468,6 +478,7 @@ class ManualModePanel(QtWidgets.QGroupBox):
         
         # 초기값 설정
         self._current_schedule = 5
+        self._schedule_enabled = True  # 예약 발행 기본값: ON
         self._current_interval = 60
 
     def _on_file_clicked(self) -> None:
@@ -507,8 +518,28 @@ class ManualModePanel(QtWidgets.QGroupBox):
     def _update_schedule_display(self) -> None:
         """예약 시간 표시를 업데이트합니다."""
         self.schedule_value_label.setText(str(self._current_schedule))
-        self.schedule_preview_label.setText(f"{self._current_schedule}분 후 발행")
+        if self._schedule_enabled:
+            self.schedule_preview_label.setText(f"{self._current_schedule}분 후 발행")
+        else:
+            self.schedule_preview_label.setText("즉시 발행")
         self.schedule_changed.emit(self._current_schedule)
+    
+    def _toggle_schedule(self) -> None:
+        """예약 발행 ON/OFF 토글"""
+        self._schedule_enabled = self.schedule_toggle_btn.isChecked()
+        
+        if self._schedule_enabled:
+            self.schedule_toggle_btn.setText("ON")
+            self.schedule_preview_label.setText(f"{self._current_schedule}분 후 발행")
+        else:
+            self.schedule_toggle_btn.setText("OFF")
+            self.schedule_preview_label.setText("즉시 발행")
+        
+        # 시간 조절 버튼 활성화/비활성화
+        self.schedule_decrease_btn.setEnabled(self._schedule_enabled)
+        self.schedule_increase_btn.setEnabled(self._schedule_enabled)
+        
+        self.schedule_enabled.emit(self._schedule_enabled)
     
     def _toggle_repeat(self) -> None:
         """반복 실행 ON/OFF 토글"""

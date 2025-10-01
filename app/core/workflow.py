@@ -8,7 +8,7 @@ from typing import Optional
 from PyQt5 import QtCore
 
 from app.core.services.content_service import ContentGenerator, GeneratedPost, save_backup
-from app.core.automation.naver_publisher import BlogPostContent, publish_blog_post
+from app.core.automation.naver_publisher import BlogPostContent, publish_blog_post, AccountProtectionException
 from .constants import GENERATION_STEPS_PER_POST
 from .models import WorkflowParams
 
@@ -156,12 +156,20 @@ class WorkflowWorker(QtCore.QThread):
                 self._emit_status(f"{idx}번째 글 발행 완료")
                 self._completed_posts = idx
                 
-                # 블로그 URL이 있으면 UI에 전달
+                # 블로그 URL이 있으면 UI에 전달 (아이디 - 생성여부 - 제목 형식)
+                account_id = self.params.naver_id or "알 수 없음"
                 if blog_url:
-                    self.post_saved_signal.emit(post.title, blog_url)
+                    display_text = f"{account_id} - ✅ 성공 - {post.title}"
+                    self.post_saved_signal.emit(display_text, blog_url)
                     LOGGER.info(f"게시물 '{post.title}' URL 전달 완료: {blog_url}")
                 else:
+                    display_text = f"{account_id} - ❌ 실패 - {post.title}"
+                    self.post_saved_signal.emit(display_text, "")
                     LOGGER.warning(f"게시물 '{post.title}' URL을 가져오지 못했습니다.")
+        except AccountProtectionException as exc:
+            # 보호조치는 상위로 전파하여 다음 계정으로 넘어가도록 함
+            LOGGER.warning("계정 보호조치 감지: %s", exc)
+            raise
         except RuntimeError as exc:
             LOGGER.warning("작업 중단: %s", exc)
             self.error_signal.emit(str(exc))

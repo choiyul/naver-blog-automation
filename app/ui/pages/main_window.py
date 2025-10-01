@@ -24,7 +24,7 @@ from app.core.preferences import UserSettings, load_settings, save_settings
 from app.core.services.content_service import ContentGenerator
 from app.core.theme import DARK_THEME, LIGHT_THEME
 from app.core.workflow import WorkflowWorker
-from app.core.automation.naver_publisher import BlogPostContent, publish_blog_post, create_chrome_driver
+from app.core.automation.naver_publisher import BlogPostContent, publish_blog_post, create_chrome_driver, AccountProtectionException
 from ..components.account_panel import AccountPanel
 from ..components.header_bar import HeaderBar
 from ..components.ai_control_panel import AiControlPanel
@@ -201,6 +201,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.manual_panel.file_selected.connect(self._on_manual_file_selected)
         self.manual_panel.image_selected.connect(self._on_image_selected)
         self.manual_panel.schedule_changed.connect(self._on_schedule_changed)
+        self.manual_panel.schedule_enabled.connect(self._on_schedule_enabled)
         self.manual_panel.repeat_toggled.connect(self._on_repeat_toggled)
         self.manual_panel.interval_changed.connect(self._on_interval_changed)
 
@@ -237,6 +238,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.manual_panel.manual_title_edit.setText(settings.manual_title)
         self.manual_panel.manual_tags_edit.setText(settings.manual_tags)
         self.manual_panel._current_schedule = settings.schedule_minutes
+        self.manual_panel._schedule_enabled = settings.schedule_enabled
+        self.manual_panel.schedule_toggle_btn.setChecked(settings.schedule_enabled)
+        self.manual_panel.schedule_toggle_btn.setText("ON" if settings.schedule_enabled else "OFF")
+        self.manual_panel.schedule_decrease_btn.setEnabled(settings.schedule_enabled)
+        self.manual_panel.schedule_increase_btn.setEnabled(settings.schedule_enabled)
         self.manual_panel._update_schedule_display()
         if settings.image_file_path:
             self.manual_panel.image_file_edit.setText(settings.image_file_path)
@@ -253,6 +259,7 @@ class MainWindow(QtWidgets.QMainWindow):
             interval_minutes=self.manual_panel._current_interval,
             image_file_path=self.manual_panel.image_file_edit.text(),
             schedule_minutes=self.manual_panel._current_schedule,
+            schedule_enabled=self.manual_panel._schedule_enabled,
         )
         save_settings(self._settings_file(), settings)
 
@@ -350,6 +357,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_settings()
 
     def _on_schedule_changed(self, minutes: int) -> None:
+        self._save_settings()
+    
+    def _on_schedule_enabled(self, enabled: bool) -> None:
         self._save_settings()
 
     def _on_repeat_toggled(self, enabled: bool) -> None:
@@ -1179,6 +1189,9 @@ class MainWindow(QtWidgets.QMainWindow):
             file_path = Path(self.manual_panel.manual_file_edit.text()) if self.manual_panel.manual_file_edit.text() else None
             if file_path and file_path.exists():
                 manual_body = file_path.read_text(encoding="utf-8")
+        # 예약 발행이 OFF이면 schedule_minutes를 0으로 설정 (즉시 발행)
+        schedule_minutes = self.manual_panel._current_schedule if self.manual_panel._schedule_enabled else 0
+        
         return WorkflowParams(
             keyword=self.ai_control_panel.keyword_edit.text().strip() or self.manual_panel.manual_title_edit.text().strip(),
             count=count,
@@ -1190,7 +1203,7 @@ class MainWindow(QtWidgets.QMainWindow):
             manual_tags=self.manual_panel.manual_tags_edit.text().strip(),
             manual_file_path=self.manual_panel.manual_file_edit.text() or None,
             image_file_path=self.manual_panel.image_file_edit.text() or None,
-            schedule_minutes=self.manual_panel._current_schedule,
+            schedule_minutes=schedule_minutes,
             naver_id=self._selected_account_id,
             naver_profile_dir=str(self._accounts[self._selected_account_id].profile_dir) if self._selected_account_id else None,
         )
@@ -1297,14 +1310,13 @@ class MainWindow(QtWidgets.QMainWindow):
         logger.info(full_message)
         self.repeat_panel.append_log(full_message)
 
-    def _on_post_saved(self, title: str, path: str) -> None:
-        # path가 URL인지 파일 경로인지 확인하여 적절히 처리
-        if path.startswith("http"):
-            # URL인 경우 더블클릭으로 열 수 있도록 저장
-            self.repeat_panel.add_post_to_history(title, path)
+    def _on_post_saved(self, display_text: str, url: str) -> None:
+        # URL이 있으면 더블클릭으로 열 수 있도록 저장
+        if url and url.startswith("http"):
+            self.repeat_panel.add_post_to_history(display_text, url)
         else:
-            # 파일 경로인 경우 기존 방식대로 처리
-            self.repeat_panel.add_post_to_history(f"{title} → {path}")
+            # URL이 없는 경우 (실패)
+            self.repeat_panel.add_post_to_history(display_text, None)
 
     def _on_workflow_finished(self, driver: object) -> None:
         self._driver = driver
@@ -1600,11 +1612,15 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                     worker.post_saved_signal.connect(self.post_saved_signal)
                     worker.status_signal.connect(self.status_signal)
                     
-                    # 워크플로우 실행 (동기적으로)
-                    self.progress_signal.emit(f"📝 '{account_id}' 계정에서 글 발행을 시작합니다...", False)
-                    worker.run()  # start() 대신 run() 직접 호출로 동기 실행
-                    
-                    self.progress_signal.emit(f"✅ '{account_id}' 계정 발행 완료!", True)
+                    # 워크플로우 실행 (동기적으로) - 보호조치 예외 처리 추가
+                    try:
+                        self.progress_signal.emit(f"📝 '{account_id}' 계정에서 글 발행을 시작합니다...", False)
+                        worker.run()  # start() 대신 run() 직접 호출로 동기 실행
+                        self.progress_signal.emit(f"✅ '{account_id}' 계정 발행 완료!", True)
+                    except AccountProtectionException as e:
+                        self.progress_signal.emit(f"⚠️ '{account_id}' 계정 보호조치 감지 - 다음 계정으로 넘어갑니다", True)
+                        logger.warning(f"계정 '{account_id}' 보호조치: {e}")
+                        continue  # 다음 계정으로 넘어감
                     
                     # 계정 간 대기 시간 (안정성)
                     if index < self.total_accounts:  # 마지막 계정이 아니면
