@@ -622,5 +622,24 @@ class ManualModePanel(QtWidgets.QGroupBox):
             else:
                 self.disabled_overlay.show()
                 self.disabled_overlay.raise_()  # 맨 위로 올리기
+    
+    def enable_controls(self, enabled: bool) -> None:
+        """컨트롤들을 활성화/비활성화합니다."""
+        controls = [
+            self.manual_title_edit,
+            self.manual_file_edit,
+            self.manual_file_button,
+            self.manual_tags_edit,
+            self.image_file_edit,
+            self.image_file_button,
+            self.schedule_toggle_btn,
+            self.schedule_decrease_btn,
+            self.schedule_increase_btn,
+            self.repeat_toggle_btn,
+            self.interval_decrease_btn,
+            self.interval_increase_btn,
+        ]
+        for widget in controls:
+            widget.setEnabled(enabled)
 
 
