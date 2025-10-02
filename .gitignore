@@ -4,62 +4,57 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
+dist/
+build/
 *.egg
-MANIFEST
 
-# Virtual environments
-.venv/
+# 가상환경
 venv/
-ENV/
 env/
+ENV/
+.venv
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
+*~
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
 
-# User data and storage
-user_data/
-storage/
+# PyInstaller
+*.spec.bak
+build/
+dist/
 
-# Logs
+# 로그
 logs/
 *.log
 
-# Backup files
-*.backup
-*.bak
+# 환경 변수
+.env
+.env.local
+
+# 테스트
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 임시 파일
 *.tmp
+*.temp
+.cache/
 
-# Chrome/Browser data
-user_data_backup/
+# Windows
+Thumbs.db
+desktop.ini
 
-# Build artifacts
-*.exe
-*.msi
-*.dmg
-*.pkg
+# 사용자 데이터
+*.db
+*.sqlite
+*.sqlite3
+
+# 백업
+*.bak
+*.backup

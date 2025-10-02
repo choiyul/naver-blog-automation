@@ -36,12 +36,34 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['runtime_hook.py'],
     excludes=[
-        'matplotlib', 'numpy', 'pandas', 'scipy',  # 불필요한 과학 계산 라이브러리
-        'tkinter', 'turtle',  # 불필요한 GUI 라이브러리
-        'test', 'tests', 'testing',  # 테스트 관련
-        'unittest', 'doctest',  # 테스트 프레임워크
+        # 과학 계산 라이브러리 (불필요)
+        'matplotlib', 'numpy', 'pandas', 'scipy', 'sympy',
+        # GUI 라이브러리 (불필요)
+        'tkinter', 'turtle', 'wx', 'gtk',
+        # 테스트 관련
+        'test', 'tests', 'testing', 'unittest', 'doctest', 'pytest', 'nose',
+        # 문서화 도구
+        'sphinx', 'docutils', 'jinja2',
+        # 개발 도구
+        'setuptools', 'distutils', 'pkg_resources',
+        # 데이터베이스 (sqlite3만 사용)
+        'psycopg2', 'pymongo', 'MySQLdb', 'mysql',
+        # 이미지 처리 (Pillow만 사용)
+        'cv2', 'skimage',
+        # 네트워크/서버 (불필요)
+        'tornado', 'twisted', 'flask', 'django',
+        # 기타 대형 라이브러리
+        'IPython', 'jupyter', 'notebook',
+        # XML/HTML 파서 (selenium 내장 사용)
+        'lxml', 'bs4', 'beautifulsoup4',
+        # 압축 라이브러리 (내장만 사용)
+        'bz2file', 'lzma',
+        # 암호화 (내장만 사용)
+        'cryptography', 'pycryptodome',
+        # 기타
+        'pydoc', 'pdb', 'profile', 'cProfile',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
