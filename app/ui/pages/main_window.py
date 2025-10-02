@@ -177,27 +177,15 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         )
 
-        # UI 스케일링 상태
-        self._ui_scale: float = 1.0
-        self._theme_map_cache: Optional[Dict[str, object]] = None
-        
-        # 리사이즈 이벤트 최적화용 타이머
-        self._resize_timer = QtCore.QTimer()
-        self._resize_timer.setSingleShot(True)
-        self._resize_timer.timeout.connect(self._apply_resize_changes)
-        
-        # 설정 저장 debounce 타이머 (성능 최적화)
+        # 설정 저장 debounce 타이머
         self._settings_save_timer = QtCore.QTimer()
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.timeout.connect(self._do_save_settings)
         
-        # 계정 저장 debounce 타이머 (성능 최적화)
+        # 계정 저장 debounce 타이머
         self._accounts_save_timer = QtCore.QTimer()
         self._accounts_save_timer.setSingleShot(True)
         self._accounts_save_timer.timeout.connect(self._do_save_accounts)
-        
-        # 스타일시트 캐시
-        self._original_qss: Optional[str] = None
 
         # 애플리케이션 리소스 경로(고정)와 사용자 데이터 경로(가변)를 분리
         self.app_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
@@ -1619,16 +1607,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.account_panel.set_theme(theme)
 
     def _load_stylesheet(self, theme_map: Dict[str, object]) -> None:
-        # 테마 맵 캐시 (리사이즈 시 재적용)
-        self._theme_map_cache = theme_map
         style_path = self.app_root / "app" / "resources" / "styles" / "main.qss"
         if not style_path.exists():
             return
 
-        # Cache original QSS so scaling does not accumulate
-        if self._original_qss is None:
-            self._original_qss = style_path.read_text(encoding="utf-8")
-        qss = self._original_qss
+        qss = style_path.read_text(encoding="utf-8")
         replacements = {
             "{{BACKGROUND}}": theme_map["background"],
             "{{CARD}}": theme_map["card"],
@@ -1650,60 +1633,10 @@ class MainWindow(QtWidgets.QMainWindow):
         for token, value in replacements.items():
             qss = qss.replace(token, str(value))
 
-        # Apply dynamic font scaling by multiplying any 'font-size: Npx' values
-        try:
-            scale = getattr(self, "_ui_scale", 1.0)
-            if abs(scale - 1.0) > 0.01:
-                import re
-                def _scale_font(match: "re.Match[str]") -> str:
-                    size_px = int(match.group(1))
-                    new_px = max(10, int(round(size_px * scale)))
-                    return f"font-size: {new_px}px"
-                qss = re.sub(r"font-size:\s*(\d+)px", _scale_font, qss)
-        except Exception:
-            # If scaling fails for any reason, fall back to unscaled qss
-            pass
-
         QtWidgets.QApplication.instance().setStyleSheet(qss)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
-        # 리사이즈 이벤트 최적화 - 타이머로 지연 처리
-        if not self._resize_timer.isActive():
-            self._resize_timer.start(150)  # 150ms 지연
         super().resizeEvent(event)
-    
-    def _apply_resize_changes(self) -> None:
-        """리사이즈 변경사항을 지연 적용 (성능 최적화)"""
-        try:
-            width = max(1, self.width())
-            height = max(1, self.height())
-            
-            # 화면 크기에 따른 기준 크기 동적 조정 (캐시 활용)
-            if not hasattr(self, '_base_size_cache'):
-                screen = QtWidgets.QApplication.primaryScreen()
-                if screen:
-                    screen_width = screen.availableGeometry().width()
-                    if screen_width <= 1366:
-                        self._base_size_cache = (1200, 800)
-                    elif screen_width <= 1920:
-                        self._base_size_cache = (1400, 900)
-                    else:
-                        self._base_size_cache = (1600, 1000)
-                else:
-                    self._base_size_cache = (1400, 900)
-            
-            base_width, base_height = self._base_size_cache
-            scale_w = width / base_width
-            scale_h = height / base_height
-            new_scale = max(0.8, min(1.5, min(scale_w, scale_h)))
-            
-            # 스케일 변화가 충분히 클 때만 업데이트
-            if abs(new_scale - self._ui_scale) > 0.08:  # 임계값 증가로 빈도 감소
-                self._ui_scale = new_scale
-                if self._theme_map_cache:
-                    self._load_stylesheet(self._theme_map_cache)
-        except Exception:
-            pass
 
     def _non_blocking_wait_ms(self, ms: int) -> None:
         # UI 이벤트를 처리하면서 대기 (성능 최적화)
@@ -2083,16 +2016,16 @@ class MainWindow(QtWidgets.QMainWindow):
             return error_msg
 
     def _cleanup_browser_sessions(self) -> None:
-        """브라우저 세션 정리를 수행합니다 (로그인 세션 보존)."""
+        """브라우저를 완전히 초기화합니다."""
         from app.core.automation.naver_publisher import _cleanup_chrome_processes, _cleanup_profile_locks
         
         # 확인 메시지 표시
         reply = QtWidgets.QMessageBox.question(
             self,
             "브라우저 정리",
-            "🔧 Chrome 프로세스와 락 파일을 정리합니다.\n\n"
-            "✅ 로그인 세션과 쿠키는 보존됩니다!\n"
-            "✅ 프로세스 락 파일만 삭제합니다.\n\n"
+            "🔧 브라우저를 완전히 초기화합니다.\n\n"
+            "⚠️ 현재 열린 브라우저가 모두 종료됩니다!\n"
+            "⚠️ 다음 실행 시 새로 브라우저를 열어야 합니다.\n\n"
             "브라우저 오류 해결에 도움이 됩니다.\n"
             "계속하시겠습니까?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
@@ -2102,57 +2035,60 @@ class MainWindow(QtWidgets.QMainWindow):
         if reply != QtWidgets.QMessageBox.Yes:
             return
         
-        self._log("🔧 브라우저 정리를 시작합니다...")
+        self._log("🔧 브라우저 완전 초기화를 시작합니다...")
         
         try:
-            # Chrome 프로세스 정리
+            # 현재 브라우저 종료
+            if self._driver:
+                try:
+                    self._driver.quit()
+                    self._driver = None
+                    self._log("✅ 현재 브라우저 종료 완료")
+                except Exception as e:
+                    self._log(f"⚠️ 브라우저 종료 중 오류 (무시): {e}")
+            
+            # Chrome 프로세스 완전 정리
             _cleanup_chrome_processes()
             self._log("✅ Chrome 프로세스 정리 완료")
             
-            # 모든 계정의 프로필 락 파일 정리 (로그인 세션 보존)
+            # 모든 계정의 프로필 락 파일 정리
             cleaned_profiles = 0
             for account in self._accounts.values():
                 _cleanup_profile_locks(account.profile_dir)
                 cleaned_profiles += 1
             
             self._log(f"✅ {cleaned_profiles}개 계정 프로필 락 파일 정리 완료")
-            self._log("✅ 로그인 세션과 캐시는 보존되었습니다")
+            self._log("✅ 브라우저 완전 초기화 완료")
             
             QtWidgets.QMessageBox.information(
                 self,
-                "브라우저 정리 완료", 
-                "✅ 브라우저 정리가 완료되었습니다!\n\n"
-                "✔ Chrome 프로세스 종료\n"
-                f"✔ {cleaned_profiles}개 계정 프로필 락 파일 정리\n"
-                "✔ 로그인 세션 및 쿠키 보존\n\n"
-                "이제 브라우저 오류 없이 계정을 사용할 수 있습니다."
+                "브라우저 초기화 완료", 
+                "✅ 브라우저 초기화가 완료되었습니다!\n\n"
+                "✔ 현재 브라우저 종료\n"
+                "✔ Chrome 프로세스 완전 정리\n"
+                f"✔ {cleaned_profiles}개 계정 프로필 락 파일 정리\n\n"
+                "이제 새로 브라우저를 열어보세요."
             )
             
         except Exception as e:
-            self._log(f"❌ 브라우저 정리 중 오류: {e}")
+            self._log(f"❌ 브라우저 초기화 중 오류: {e}")
             QtWidgets.QMessageBox.warning(
                 self,
-                "브라우저 정리 오류",
-                f"브라우저 정리 중 오류가 발생했습니다:\n{e}\n\n"
+                "브라우저 초기화 오류",
+                f"브라우저 초기화 중 오류가 발생했습니다:\n{e}\n\n"
                 "수동으로 Chrome을 완전히 종료한 후 다시 시도해주세요."
             )
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
-        """프로그램 종료 시 리소스 정리 (메모리 누수 방지)"""
+        """프로그램 종료 시 리소스 정리"""
         try:
-            # 모든 타이머 정지
-            if hasattr(self, '_resize_timer'):
-                self._resize_timer.stop()
-            if hasattr(self, '_settings_save_timer'):
-                # 저장 대기 중인 설정이 있으면 즉시 저장
-                if self._settings_save_timer.isActive():
-                    self._settings_save_timer.stop()
-                    self._do_save_settings()
-            if hasattr(self, '_accounts_save_timer'):
-                # 저장 대기 중인 계정이 있으면 즉시 저장
-                if self._accounts_save_timer.isActive():
-                    self._accounts_save_timer.stop()
-                    self._do_save_accounts()
+            # 저장 대기 중인 설정이 있으면 즉시 저장
+            if hasattr(self, '_settings_save_timer') and self._settings_save_timer.isActive():
+                self._settings_save_timer.stop()
+                self._do_save_settings()
+            if hasattr(self, '_accounts_save_timer') and self._accounts_save_timer.isActive():
+                self._accounts_save_timer.stop()
+                self._do_save_accounts()
             
             # 워커 스레드 정리
             if self._worker and self._worker.isRunning():
@@ -2261,25 +2197,21 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                         naver_profile_dir=str(account.profile_dir),
                     )
 
-                    self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
-                    
-                    # 기존 브라우저가 있으면 정리
-                    if self.driver:
+                    # 첫 번째 계정에서만 브라우저 생성
+                    if index == 0:
+                        self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
+                        
+                        # 새 브라우저 생성 (계정별 프로필 사용)
                         try:
-                            self.driver.quit()
-                            time.sleep(1.5)  # 2초 -> 1.5초 단축
-                        except Exception:
-                            pass
-                        finally:
-                            self.driver = None
-
-                    # 새 브라우저 생성 (계정별 프로필 사용)
-                    try:
-                        self.driver = create_chrome_driver(account.profile_dir)
-                        self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
-                    except Exception as exc:
-                        self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
-                        continue
+                            self.driver = create_chrome_driver(account.profile_dir)
+                            self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
+                        except Exception as exc:
+                            self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
+                            continue
+                    else:
+                        # 이후 계정들은 기존 브라우저 재사용
+                        self.progress_signal.emit(f"🔄 '{account_id}' 계정으로 전환 중...", False)
+                        # 브라우저는 그대로 유지하고 계정 전환만 수행
 
                     # 계정별 워크플로우 실행
                     worker = WorkflowWorker(
