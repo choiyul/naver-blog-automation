@@ -57,9 +57,6 @@ TYPING_DELAY_SECONDS = 0.05
 PUBLISH_DELAY_SECONDS = 2.0
 
 
-class AccountProtectionException(Exception):
-    """계정이 보호조치 상태일 때 발생하는 예외"""
-    pass
 
 
 @dataclass
@@ -382,25 +379,6 @@ def _report(callback: Optional[Callable[[str, bool], None]], message: str, compl
             LOGGER.debug("Progress callback failed", exc_info=True)
 
 
-def _check_account_protection(driver: webdriver.Chrome, progress_callback: Optional[Callable[[str, bool], None]] = None) -> None:
-    """계정 보호조치 여부를 확인합니다."""
-    try:
-        # 보호조치 버튼 감지
-        protection_buttons = driver.find_elements(
-            By.XPATH, 
-            "//a[contains(@onclick, 'mainSubmit') and contains(@class, 'btn') and contains(text(), '보호조치')]"
-        )
-        
-        if protection_buttons:
-            LOGGER.warning("⚠️ 계정이 보호조치 상태입니다. 이 계정을 건너뜁니다.")
-            _report(progress_callback, "계정 보호조치 감지 - 다음 계정으로 넘어갑니다", True)
-            raise AccountProtectionException("계정이 보호조치 상태입니다.")
-    except AccountProtectionException:
-        raise  # AccountProtectionException은 그대로 전파
-    except Exception as e:
-        # 다른 예외는 무시 (보호조치 확인 실패는 치명적이지 않음)
-        LOGGER.debug(f"보호조치 확인 중 오류 (무시): {e}")
-        pass
 
 
 def _countdown_sleep(
@@ -473,8 +451,6 @@ def _open_blog_write_page(
     else:
         _report(progress_callback, "로그인 상태 확인", True)
 
-    # 보호조치 여부 확인
-    _check_account_protection(driver, progress_callback)
 
     try:
         blog_span = WebDriverWait(driver, 45).until(  # 30초 -> 45초 증가

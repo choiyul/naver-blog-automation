@@ -23,15 +23,6 @@ class WorkflowParams:
     naver_id: Optional[str]
     naver_profile_dir: Optional[str]
 
-@dataclass
-class AccountProfile:
-    """네이버 계정과 연결된 브라우저 프로필 및 자격 증명 정보."""
-
-    account_id: str
-    profile_dir: Path
-    password: str = ""
-    login_initialized: bool = False
-    login_failed: bool = False  # 로그인 실패 여부 (사용 불가 계정)
 
 
 SettingsData = dict[str, Any]
