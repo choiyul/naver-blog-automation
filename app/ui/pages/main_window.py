@@ -56,6 +56,10 @@ class BatchLoginWorker(QtCore.QThread):
         """중단 요청 여부 확인"""
         return self._stop_requested
     
+    def _safe_log(self, message: str) -> None:
+        """스레드 안전한 로그 출력"""
+        self.progress_signal.emit(message)
+    
     def run(self):
         """일괄 로그인 실행"""
         import time
@@ -74,20 +78,20 @@ class BatchLoginWorker(QtCore.QThread):
             self.progress_signal.emit(f"📝 [{idx}/{len(self.account_ids)}] '{account_id}' 계정 로그인 시작")
             self.progress_signal.emit(f"{'=' * 70}")
             
-            # 첫 번째 계정이 아니면 CAPTCHA 방지를 위한 대기 시간 적용
+            # 첫 번째 계정이 아니면 CAPTCHA 방지를 위한 대기 시간 적용 (최소화)
             if idx > 1 and self.delay_seconds > 0:
-                # 약간의 랜덤 시간 추가 (더 자연스럽게)
-                actual_delay = self.delay_seconds + random.randint(0, 5)
+                # 최소 대기 시간으로 단축
+                actual_delay = max(3, self.delay_seconds // 2) + random.randint(0, 2)  # 최소 3초, 최대 7초
                 self.progress_signal.emit(f"⏳ CAPTCHA 방지: 다음 로그인까지 {actual_delay}초 대기 중...")
                 
-                # 1초씩 카운트다운하면서 중단 요청 확인
+                # 빠른 카운트다운
                 for remaining in range(actual_delay, 0, -1):
                     if self._should_stop():
                         self.progress_signal.emit("❌ 사용자에 의해 중단되었습니다.")
                         self.finished_signal.emit(success_count, failed_accounts)
                         return
                     
-                    if remaining % 5 == 0 or remaining <= 3:  # 5초마다 또는 마지막 3초
+                    if remaining % 3 == 0 or remaining <= 2:  # 3초마다 또는 마지막 2초
                         self.progress_signal.emit(f"  ... {remaining}초 남음")
                     time.sleep(1)
                 
@@ -95,7 +99,7 @@ class BatchLoginWorker(QtCore.QThread):
             
             try:
                 # 메인 윈도우의 메서드를 직접 호출하여 로그인 수행
-                result = self.main_window._batch_login_single_account(account_id, self._should_stop, self.progress_signal.emit)
+                result = self.main_window._batch_login_single_account(account_id, self._should_stop, self._safe_log)
                 
                 if result == "success":
                     success_count += 1
@@ -700,7 +704,13 @@ class MainWindow(QtWidgets.QMainWindow):
             account.login_initialized = True
             self._accounts[account_id] = account
             self._save_accounts()
-            self._refresh_accounts_ui(account_id)
+            # UI 업데이트를 메인 스레드에서 처리
+            QtCore.QMetaObject.invokeMethod(
+                self, 
+                "_refresh_accounts_ui", 
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, account_id)
+            )
             self._log(f"'{account_id}' 계정을 로그인된 상태로 표시했습니다.")
             return True
         return False
@@ -1697,25 +1707,25 @@ class MainWindow(QtWidgets.QMainWindow):
         if clicked_button == cancel_button:
             return
         elif clicked_button == turbo_button:
-            delay_seconds = 2
+            delay_seconds = 1  # 2초 → 1초
         elif clicked_button == fast_button:
-            delay_seconds = 5
+            delay_seconds = 3  # 5초 → 3초
         elif clicked_button == safe_button:
-            delay_seconds = 15
+            delay_seconds = 8  # 15초 → 8초
         else:  # custom_button
             delay_seconds, ok = QtWidgets.QInputDialog.getInt(
                 self,
                 "사용자 지정 설정",
                 f"계정 간 대기 시간을 설정하세요.\n\n"
                 f"💡 권장 설정:\n"
-                f"• 3-5초: 매우 빠름 (CAPTCHA 위험 높음)\n"
-                f"• 10-15초: 균형잡힌 속도\n"
-                f"• 20-30초: 안전한 속도\n\n"
+                f"• 1-3초: 매우 빠름 (CAPTCHA 위험 높음)\n"
+                f"• 5-8초: 균형잡힌 속도\n"
+                f"• 10-15초: 안전한 속도\n\n"
                 f"⏱️ 100개 기준 예상 시간:\n"
+                f"• 3초: 약 {int(total_accounts * 1.2)}분\n"
                 f"• 5초: 약 {int(total_accounts * 1.5)}분\n"
-                f"• 10초: 약 {int(total_accounts * 2)}분\n"
-                f"• 15초: 약 {int(total_accounts * 2.5)}분",
-                10,  # 기본값: 10초
+                f"• 8초: 약 {int(total_accounts * 1.8)}분",
+                5,  # 기본값: 5초 (10초 → 5초)
                 0,   # 최소값: 0초
                 300, # 최대값: 5분
                 1    # 단계
@@ -1723,24 +1733,24 @@ class MainWindow(QtWidgets.QMainWindow):
             if not ok:
                 return
         
-        # 예상 시간 계산
-        estimated_minutes = int(total_accounts * (delay_seconds + 60) / 60)  # 60초 = 로그인 처리 시간
+        # 예상 시간 계산 (최적화된 처리 시간)
+        estimated_minutes = int(total_accounts * (delay_seconds + 30) / 60)  # 30초 = 로그인 처리 시간 (60초 → 30초)
         
         self._log("=" * 70)
         self._log(f"🚀 일괄 로그인 시작: 총 {total_accounts}개 계정")
         self._log(f"⏱️  계정 간 대기 시간: {delay_seconds}초")
         self._log(f"⏰ 예상 완료 시간: 약 {estimated_minutes}분")
         
-        if delay_seconds >= 15:
+        if delay_seconds >= 8:
             self._log("🛡️ 안전: CAPTCHA 5-10%")
-        elif delay_seconds >= 5:
+        elif delay_seconds >= 3:
             self._log("⚡ 빠른: CAPTCHA 20-30%")
-        elif delay_seconds >= 2:
-            self._log("🚀 초고속: CAPTCHA 30-40% | 100개=50분")
+        elif delay_seconds >= 1:
+            self._log("🚀 초고속: CAPTCHA 30-40% | 100개=30분")
         else:
             self._log("🔥 극한: CAPTCHA 50%+ | 빠르지만 위험")
         
-        self._log("💡 CAPTCHA 나오면 즉시 풀기 (30초 대기)")
+        self._log("💡 CAPTCHA 나오면 즉시 풀기 (20초 대기)")
         self._log("=" * 70)
         
         # UI 비활성화 (진행 중 다른 작업 방지)
@@ -1812,20 +1822,19 @@ class MainWindow(QtWidgets.QMainWindow):
             log_func(f"✅ '{account_id}' 계정은 이미 로그인된 상태입니다. 건너뜁니다.")
             return "skipped"
         
+        driver = None
         try:
             # 브라우저 생성
             log_func(f"'{account_id}' 계정용 브라우저 생성 중...")
             driver = create_chrome_driver(account.profile_dir)
             log_func(f"✅ 브라우저 생성 완료")
-            self._driver = driver
             
-            # 네이버 메인 페이지 접속
-            self._non_blocking_wait_ms(1000)  # 2초 → 1초로 단축
+            # 네이버 메인 페이지 접속 (빠른 접속)
             log_func("네이버 접속 중...")
             
             try:
                 driver.get("https://www.naver.com/")
-                WebDriverWait(driver, 15).until(  # 30초 → 15초로 단축
+                WebDriverWait(driver, 10).until(  # 15초 → 10초로 단축
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
                 log_func("✅ 접속 OK")
@@ -1835,7 +1844,6 @@ class MainWindow(QtWidgets.QMainWindow):
                     driver.quit()
                 except:
                     pass
-                self._driver = None
                 return "네이버 접속 실패"
             
             # 중단 요청 확인
@@ -1845,23 +1853,20 @@ class MainWindow(QtWidgets.QMainWindow):
                     driver.quit()
                 except:
                     pass
-                self._driver = None
                 return "stopped"
             
-            # 로그인 상태 확인
+            # 로그인 상태 확인 (빠른 확인)
             current_logged_in_account = self._check_current_logged_in_account(driver)
             
             if current_logged_in_account == account_id:
-                    # 이미 로그인되어 있음
-                    log_func(f"✅ '{account_id}' 이미 로그인됨 (건너뜀)")
-                    self._mark_account_logged_in(account_id)
-                    try:
-                        driver.quit()
-                        self._non_blocking_wait_ms(500)  # 2초 → 0.5초로 단축
-                    except:
-                        pass
-                    self._driver = None
-                    return "skipped"
+                # 이미 로그인되어 있음
+                log_func(f"✅ '{account_id}' 이미 로그인됨 (건너뜀)")
+                self._mark_account_logged_in(account_id)
+                try:
+                    driver.quit()
+                except:
+                    pass
+                return "skipped"
                 
             elif current_logged_in_account and current_logged_in_account != account_id:
                 # 다른 계정이 로그인되어 있음 - 로그아웃
@@ -1871,20 +1876,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 else:
                     log_func("⚠️ 로그아웃 실패, 계속 진행합니다.")
             
-            # 자동 로그인 수행 (로그인 버튼 자동 클릭)
+            # 자동 로그인 수행 (빠른 로그인)
             log_func(f"🔐 '{account_id}' 계정 자동 로그인을 시작합니다...")
             
             try:
-                # 로그인 페이지로 이동 (최적화)
+                # 로그인 페이지로 이동 (빠른 이동)
                 try:
-                    login_button = WebDriverWait(driver, 10).until(  # 20초 → 10초
+                    login_button = WebDriverWait(driver, 5).until(  # 10초 → 5초
                         EC.element_to_be_clickable((By.CSS_SELECTOR, "a.MyView-module__link_login___HpHMW"))
                     )
                     driver.execute_script("arguments[0].click();", login_button)  # JS 클릭 (더 빠름)
-                    self._non_blocking_wait_ms(2000)  # 3초 → 2초
+                    time.sleep(1)  # 2초 → 1초
                 except Exception:
                     driver.get("https://nid.naver.com/nidlogin.login")
-                    self._non_blocking_wait_ms(1500)  # 2초 → 1.5초
+                    time.sleep(1)  # 1.5초 → 1초
                 
                 # 로그인 폼에 정보 입력 및 자동 로그인 버튼 클릭
                 if self._fill_login_form_auto(driver, account, auto_click_login=True):
@@ -1895,7 +1900,6 @@ class MainWindow(QtWidgets.QMainWindow):
                         driver.quit()
                     except:
                         pass
-                    self._driver = None
                     return "자동 로그인 버튼 클릭 실패"
                     
             except Exception as login_exc:
@@ -1904,17 +1908,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     driver.quit()
                 except:
                     pass
-                self._driver = None
                 return "로그인 프로세스 오류"
             
-            # 로그인 완료 대기 (최대 30초 - 초고속 처리)
-            log_func("⏳ 로그인 완료 대기 중... (최대 30초)")
+            # 로그인 완료 대기 (빠른 처리)
+            log_func("⏳ 로그인 완료 대기 중... (최대 15초)")
             log_func("💡 CAPTCHA 나오면 즉시 풀어주세요!")
             login_success = False
             
             captcha_detected = False
-            for attempt in range(10):  # 10회 * 3초 = 30초 (초고속 처리)
-                self._non_blocking_wait_ms(3000)  # 4초 → 3초로 단축
+            for attempt in range(10):  # 10회 * 1.5초 = 15초 (빠른 처리)
+                time.sleep(1.5)  # 2초 → 1.5초로 단축
                 
                 # 중단 요청 확인
                 if should_stop_func():
@@ -1969,10 +1972,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._mark_account_logged_in(account_id)
                 try:
                     driver.quit()
-                    self._non_blocking_wait_ms(500)  # 초고속: 1초 → 0.5초
                 except:
                     pass
-                self._driver = None
                 return "success"
             else:
                 # 타임아웃 시에도 쿠키 재확인
@@ -1983,22 +1984,18 @@ class MainWindow(QtWidgets.QMainWindow):
                         self._mark_account_logged_in(account_id)
                         try:
                             driver.quit()
-                            self._non_blocking_wait_ms(500)
                         except:
                             pass
-                        self._driver = None
                         return "success"
                 except:
                     pass
                 
-                log_func(f"❌ '{account_id}' 실패 (30초 초과)")
+                log_func(f"❌ '{account_id}' 실패 (15초 초과)")
                 try:
                     driver.quit()
-                    self._non_blocking_wait_ms(500)
                 except:
                     pass
-                self._driver = None
-                return "타임아웃"
+                return "로그인 실패 (15초 초과)"
                 
         except Exception as exc:
             error_msg = str(exc)[:50]

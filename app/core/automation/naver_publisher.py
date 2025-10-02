@@ -518,25 +518,49 @@ def _open_blog_write_page(
         blog_link.click()
     _report(progress_callback, "블로그 메뉴 클릭", True)
 
-    try:
-        write_button = WebDriverWait(driver, 45).until(  # 30초 -> 45초 증가
-            EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, "a.MyView-module__link_tool___tAoH1.MyView-module__type_write___l9FOk")
+    # 글쓰기 버튼 찾기 (다양한 선택자 시도)
+    write_button = None
+    write_button_selectors = [
+        "a.MyView-module__link_tool___tAoH1.MyView-module__type_write___l9FOk",  # 기본 선택자
+        "a[href*='write']",  # href에 write가 포함된 링크
+        "a[title*='글쓰기']",  # title에 글쓰기가 포함된 링크
+        "a[aria-label*='글쓰기']",  # aria-label에 글쓰기가 포함된 링크
+        ".MyView-module__link_tool___tAoH1",  # 클래스만으로 찾기
+        "a[data-clk*='write']",  # data-clk에 write가 포함된 링크
+    ]
+    
+    for selector in write_button_selectors:
+        try:
+            _report(progress_callback, f"글쓰기 버튼 찾는 중... ({selector})", False)
+            write_button = WebDriverWait(driver, 10).until(  # 45초 → 10초로 단축
+                EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
             )
-        )
-    except TimeoutException as exc:
+            _report(progress_callback, f"✅ 글쓰기 버튼 찾음: {selector}", True)
+            break
+        except TimeoutException:
+            continue
+    
+    if not write_button:
         # 스크롤 후 재시도
-        _report(progress_callback, "글쓰기 버튼을 찾지 못했습니다. 재시도 중...", False)
+        _report(progress_callback, "글쓰기 버튼을 찾지 못했습니다. 스크롤 후 재시도 중...", False)
         try:
             driver.execute_script("window.scrollTo(0, 0);")  # 상단으로
-            time.sleep(2)
-            write_button = WebDriverWait(driver, 30).until(
-                EC.element_to_be_clickable(
-                    (By.CSS_SELECTOR, "a.MyView-module__link_tool___tAoH1.MyView-module__type_write___l9FOk")
-                )
-            )
-            LOGGER.info("✅ 스크롤 후 글쓰기 버튼 찾기 성공")
-        except TimeoutException:
+            time.sleep(1)  # 2초 → 1초로 단축
+            
+            for selector in write_button_selectors:
+                try:
+                    write_button = WebDriverWait(driver, 5).until(  # 30초 → 5초로 단축
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                    _report(progress_callback, f"✅ 스크롤 후 글쓰기 버튼 찾음: {selector}", True)
+                    break
+                except TimeoutException:
+                    continue
+                    
+            if not write_button:
+                _report(progress_callback, "글쓰기 버튼을 찾지 못했습니다.", False)
+                raise RuntimeError("글쓰기 버튼을 찾을 수 없습니다. 네트워크를 확인해주세요.")
+        except Exception as exc:
             _report(progress_callback, "글쓰기 버튼을 찾지 못했습니다.", False)
             raise RuntimeError("글쓰기 버튼을 찾을 수 없습니다. 네트워크를 확인해주세요.") from exc
 
@@ -546,11 +570,17 @@ def _open_blog_write_page(
         raise RuntimeError("사용자에 의해 작업이 중단되었습니다.")
 
     handles_before = list(driver.window_handles)
-    write_button.click()
-    _report(progress_callback, "글쓰기 버튼 클릭", True)
+    
+    # 글쓰기 버튼 클릭 (JavaScript 클릭으로 더 안정적)
+    try:
+        driver.execute_script("arguments[0].click();", write_button)
+        _report(progress_callback, "글쓰기 버튼 클릭 (JavaScript)", True)
+    except:
+        write_button.click()
+        _report(progress_callback, "글쓰기 버튼 클릭 (일반)", True)
 
     try:
-        WebDriverWait(driver, 20).until(lambda d: len(d.window_handles) > len(handles_before))  # 10초 -> 20초
+        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > len(handles_before))  # 20초 → 10초로 단축
     except TimeoutException:
         _report(progress_callback, "새 글쓰기 창을 열지 못했습니다.", False)
         raise
@@ -565,8 +595,8 @@ def _open_blog_write_page(
     _report(progress_callback, "편집기 iframe 전환 중", False)
     
     try:
-        # ID로 바로 전환 (이전 테스트에서 성공한 방법)
-        WebDriverWait(driver, 20).until(EC.frame_to_be_available_and_switch_to_it("mainFrame"))  # 10초 -> 20초
+        # ID로 바로 전환 (빠른 전환)
+        WebDriverWait(driver, 10).until(EC.frame_to_be_available_and_switch_to_it("mainFrame"))  # 20초 → 10초로 단축
         LOGGER.info("mainFrame 전환 성공")
         _report(progress_callback, "편집기 iframe 전환 완료", True)
         
