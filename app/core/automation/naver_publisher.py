@@ -57,9 +57,6 @@ TYPING_DELAY_SECONDS = 0.05
 PUBLISH_DELAY_SECONDS = 2.0
 
 
-class AccountProtectionException(Exception):
-    """계정이 보호조치 상태일 때 발생하는 예외"""
-    pass
 
 
 @dataclass
@@ -71,12 +68,8 @@ class BlogPostContent:
     tags: list[str]
 
 
-def _is_windows() -> bool:
-    return platform.system() == "Windows"
-
-
 def _cmd_key():
-    return Keys.CONTROL if _is_windows() else Keys.COMMAND
+    return Keys.CONTROL  # Windows 전용
 
 
 def _cleanup_chrome_processes() -> None:
@@ -189,11 +182,8 @@ def create_chrome_driver(user_data_dir: Path, retry_count: int = 3) -> webdriver
             chrome_options.add_argument("--ignore-certificate-errors")
             chrome_options.add_argument("--ignore-ssl-errors")
     
-            # OS에 맞춘 실제 User-Agent (최신 버전)
-            if _is_windows():
-                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            else:
-                user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            # Windows 전용 User-Agent
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             
             chrome_options.add_argument(f"--user-agent={user_agent}")
             
@@ -391,25 +381,6 @@ def _report(callback: Optional[Callable[[str, bool], None]], message: str, compl
             LOGGER.debug("Progress callback failed", exc_info=True)
 
 
-def _check_account_protection(driver: webdriver.Chrome, progress_callback: Optional[Callable[[str, bool], None]] = None) -> None:
-    """계정 보호조치 여부를 확인합니다."""
-    try:
-        # 보호조치 버튼 감지
-        protection_buttons = driver.find_elements(
-            By.XPATH, 
-            "//a[contains(@onclick, 'mainSubmit') and contains(@class, 'btn') and contains(text(), '보호조치')]"
-        )
-        
-        if protection_buttons:
-            LOGGER.warning("⚠️ 계정이 보호조치 상태입니다. 이 계정을 건너뜁니다.")
-            _report(progress_callback, "계정 보호조치 감지 - 다음 계정으로 넘어갑니다", True)
-            raise AccountProtectionException("계정이 보호조치 상태입니다.")
-    except AccountProtectionException:
-        raise  # AccountProtectionException은 그대로 전파
-    except Exception as e:
-        # 다른 예외는 무시 (보호조치 확인 실패는 치명적이지 않음)
-        LOGGER.debug(f"보호조치 확인 중 오류 (무시): {e}")
-        pass
 
 
 def _countdown_sleep(
@@ -482,8 +453,6 @@ def _open_blog_write_page(
     else:
         _report(progress_callback, "로그인 상태 확인", True)
 
-    # 보호조치 여부 확인
-    _check_account_protection(driver, progress_callback)
 
     try:
         blog_span = WebDriverWait(driver, 45).until(  # 30초 -> 45초 증가
@@ -784,26 +753,22 @@ def _insert_image(
                 
         except Exception as e:
             LOGGER.warning(f"JavaScript 클립보드 복사 실패: {e}")
-            # 대안: OS별 네이티브 클립보드
+            # Windows 전용 네이티브 클립보드
             try:
-                if _is_windows():
-                    import win32clipboard  # type: ignore
-                    import win32con  # type: ignore
-                    from PIL import Image  # type: ignore
-                    img = Image.open(image_file_path).convert('RGB')
-                    import io
-                    output = io.BytesIO()
-                    img.save(output, format='BMP')
-                    data = output.getvalue()[14:]
-                    output.close()
-                    win32clipboard.OpenClipboard()
-                    win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardData(win32con.CF_DIB, data)
-                    win32clipboard.CloseClipboard()
-                    LOGGER.info("시스템 클립보드 복사 성공 (Windows)")
-                else:
-                    subprocess.run(['osascript', '-e', f'set the clipboard to (read file POSIX file "{image_file_path}" as JPEG picture)'], check=True)
-                    LOGGER.info("시스템 클립보드 복사 성공 (macOS)")
+                import win32clipboard  # type: ignore
+                import win32con  # type: ignore
+                from PIL import Image  # type: ignore
+                img = Image.open(image_file_path).convert('RGB')
+                import io
+                output = io.BytesIO()
+                img.save(output, format='BMP')
+                data = output.getvalue()[14:]
+                output.close()
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32con.CF_DIB, data)
+                win32clipboard.CloseClipboard()
+                LOGGER.info("시스템 클립보드 복사 성공 (Windows)")
                 _report(progress_callback, "시스템 클립보드 복사 완료", True)
             except Exception as e2:
                 LOGGER.error(f"모든 클립보드 복사 방법 실패: {e2}")

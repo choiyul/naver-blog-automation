@@ -1,4 +1,4 @@
-name: Build Application
+name: Build Windows Application
 
 on:
   push:
@@ -7,34 +7,6 @@ on:
     branches: [main]
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Build macOS App
-        run: |
-          python -m PyInstaller build.spec
-
-      - name: Upload macOS Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: NaverBlogAutomation-macOS
-          path: dist/NaverBlogAutomation.app
-          retention-days: 30
-
   build-windows:
     runs-on: windows-latest
 
@@ -64,17 +36,11 @@ jobs:
           retention-days: 30
 
   create-release:
-    needs: [build-macos, build-windows]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
-      - name: Download macOS Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: NaverBlogAutomation-macOS
-          path: ./macos
-
       - name: Download Windows Artifact
         uses: actions/download-artifact@v4
         with:
@@ -87,24 +53,22 @@ jobs:
           tag_name: v${{ github.run_number }}
           name: Release v${{ github.run_number }}
           body: |
-            ## 🚀 자동 빌드 완료
+            ## 🚀 Windows 자동 빌드 완료
 
-            ### 변경사항
-            - 브라우저 초기화 로직 개선
-            - 다중 계정 처리 시 브라우저 재사용
-            - 정리 버튼으로만 브라우저 초기화 가능
-            - 불필요한 코드 정리 및 성능 최적화
+            ### 최적화 사항
+            - 불필요한 파일 및 코드 제거
+            - Windows 전용 최적화
+            - 메모리 사용량 최적화
+            - 빌드 크기 최적화
 
             ### 다운로드
-            - **macOS**: NaverBlogAutomation-macOS.app
             - **Windows**: NaverBlogAutomation.exe
 
             ### 사용법
-            1. 다운로드한 앱을 실행
+            1. NaverBlogAutomation.exe 실행
             2. 계정 추가 후 브라우저 열기
             3. 정리 버튼(🔧)으로 브라우저 초기화
           files: |
-            ./macos/NaverBlogAutomation.app
             ./windows/NaverBlogAutomation.exe
           draft: false
           prerelease: false

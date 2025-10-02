@@ -1,10 +1,9 @@
-"""메인 윈도우 레이아웃 구성 (계정 관리 제거)."""
+"""메인 윈도우 레이아웃 구성."""
 
 from __future__ import annotations
 
 import logging
 import sys
-import time
 from pathlib import Path
 import os
 from typing import Dict, Optional
@@ -18,7 +17,7 @@ from openai import OpenAI  # type: ignore[import]
 
 from app.core.automation.naver_publisher import (
     NAVER_HOME_URL, create_chrome_driver, BlogPostContent, 
-    publish_blog_post
+    publish_blog_post, AccountProtectionException
 )
 from app.core.constants import AUTOMATION_STEPS_PER_POST
 from app.core.models import WorkflowParams
@@ -78,19 +77,20 @@ class BatchLoginWorker(QtCore.QThread):
             self.progress_signal.emit(f"📝 [{idx}/{len(self.account_ids)}] '{account_id}' 계정 로그인 시작")
             self.progress_signal.emit(f"{'=' * 70}")
             
-            # 첫 번째 계정이 아니면 CAPTCHA 방지를 위한 대기 시간 적용
+            # 첫 번째 계정이 아니면 CAPTCHA 방지를 위한 대기 시간 적용 (최소화)
             if idx > 1 and self.delay_seconds > 0:
-                actual_delay = max(1, self.delay_seconds) + random.randint(0, 2)
+                # 최소 대기 시간으로 단축
+                actual_delay = max(3, self.delay_seconds // 2) + random.randint(0, 2)  # 최소 3초, 최대 7초
                 self.progress_signal.emit(f"⏳ CAPTCHA 방지: 다음 로그인까지 {actual_delay}초 대기 중...")
                 
-                # 중단 요청 확인하면서 대기
+                # 빠른 카운트다운
                 for remaining in range(actual_delay, 0, -1):
                     if self._should_stop():
                         self.progress_signal.emit("❌ 사용자에 의해 중단되었습니다.")
                         self.finished_signal.emit(success_count, failed_accounts)
                         return
                     
-                    if remaining % 3 == 0 or remaining <= 2:
+                    if remaining % 3 == 0 or remaining <= 2:  # 3초마다 또는 마지막 2초
                         self.progress_signal.emit(f"  ... {remaining}초 남음")
                     time.sleep(1)
                 
@@ -136,17 +136,14 @@ class _ApiKeyValidator(QtCore.QObject):
             self.finished.emit(True, "")
 
 
-=======
->>>>>>> 6594ea349b8db2941f8b477048bf2244f67ca142
 class MainWindow(QtWidgets.QMainWindow):
-    """AI / 수동 블로그 포스팅 컨트롤 센터 (계정 관리 제거)."""
+    """AI / 수동 블로그 포스팅 컨트롤 센터."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("📝 NBlog Studio - 네이버 블로그 자동화 도구")
-        self.setMinimumSize(1200, 800)
-
-        # 화면 중앙에 창 배치
+        self.setWindowTitle("네이버 블로그 자동화 스튜디오")
+        
+        # 화면 해상도에 따른 창 크기 자동 조절
         screen = QtWidgets.QApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else QtCore.QRect(0, 0, 1920, 1080)
         
@@ -187,6 +184,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings_save_timer = QtCore.QTimer()
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.timeout.connect(self._do_save_settings)
+        
+        # 계정 저장 debounce 타이머
+        self._accounts_save_timer = QtCore.QTimer()
+        self._accounts_save_timer.setSingleShot(True)
+        self._accounts_save_timer.timeout.connect(self._do_save_accounts)
 
         # Windows 전용 데이터 경로 설정
         self.app_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
@@ -197,21 +199,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.user_data_dir = self.data_root / "user_data" / self._current_user()
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
+        self.accounts_dir = self.data_root / "storage" / "accounts"
+        self.accounts_dir.mkdir(parents=True, exist_ok=True)
+        self.database_path = self.accounts_dir / "accounts.db"
+        self.profiles_root = self.accounts_dir / "profiles"
+        self.profiles_root.mkdir(parents=True, exist_ok=True)
 
         # 워커 스레드들
         self._worker: Optional[WorkflowWorker] = None
+        self._batch_login_worker: Optional[BatchLoginWorker] = None
         self._validation_thread: Optional[QtCore.QThread] = None
-        
-<<<<<<< HEAD
-        # 브라우저 드라이버
-        self._driver = None
         
         # 데이터 저장소
         self._accounts: Dict[str, AccountProfile] = {}
         self._selected_account_id: Optional[str] = None
         
-=======
->>>>>>> 6594ea349b8db2941f8b477048bf2244f67ca142
         # 상태 플래그들
         self._api_valid = False
         self._is_ai_mode = False  # 기본값을 수동모드로 변경
@@ -219,6 +221,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._load_settings()
+        self._load_accounts()
         self._apply_theme(self._current_theme)
         
         # 프로그램 시작 시 강제로 수동 모드로 설정 (설정 로드 후)
@@ -246,14 +249,16 @@ class MainWindow(QtWidgets.QMainWindow):
         content_layout = QtWidgets.QVBoxLayout()
         content_layout.setSpacing(12)
 
-        # 상단 2개 컬럼 (수동 | AI)
+        # 상단 3개 컬럼 (수동 | 계정 | AI)
         top_layout = QtWidgets.QHBoxLayout()
         top_layout.setSpacing(12)
         
         self.manual_panel = ManualModePanel()
+        self.account_panel = AccountPanel()
         self.ai_control_panel = AiControlPanel()
         
         top_layout.addWidget(self.manual_panel, 1)
+        top_layout.addWidget(self.account_panel, 1)
         top_layout.addWidget(self.ai_control_panel, 1)
         
         content_layout.addLayout(top_layout)
@@ -272,68 +277,73 @@ class MainWindow(QtWidgets.QMainWindow):
         self.header.cleanup_browser_requested.connect(self._cleanup_browser_sessions)
 
     def _connect_signals(self) -> None:
-        """UI 시그널 연결."""
-        # AI 컨트롤 패널 시그널
         self.ai_control_panel.api_key_changed.connect(self._on_api_key_changed)
         self.ai_control_panel.validate_api_key.connect(self._validate_api_key)
-        self.ai_control_panel.keyword_changed.connect(self._on_keyword_changed)
-        self.ai_control_panel.model_changed.connect(self._on_model_changed)
-        self.ai_control_panel.count_changed.connect(self._on_count_changed)
-        self.ai_control_panel.start_requested.connect(self._start_automation)
-        self.ai_control_panel.stop_requested.connect(self._stop_automation)
+        self.ai_control_panel.keyword_changed.connect(lambda _: self._save_settings())
+        self.ai_control_panel.model_changed.connect(lambda _: self._save_settings())
+        self.ai_control_panel.count_changed.connect(lambda _: self._save_settings())
+        self.ai_control_panel.start_requested.connect(self._start_workflow)
+        self.ai_control_panel.stop_requested.connect(self._stop_workflow)
 
-        # 수동 모드 패널 시그널
-        self.manual_panel.title_changed.connect(self._on_manual_title_changed)
-        self.manual_panel.tags_changed.connect(self._on_manual_tags_changed)
+        self.manual_panel.title_changed.connect(lambda _: self._save_settings())
+        self.manual_panel.tags_changed.connect(lambda _: self._save_settings())
         self.manual_panel.file_selected.connect(self._on_manual_file_selected)
-        self.manual_panel.image_selected.connect(self._on_manual_image_selected)
+        self.manual_panel.image_selected.connect(self._on_image_selected)
         self.manual_panel.schedule_changed.connect(self._on_schedule_changed)
         self.manual_panel.schedule_enabled.connect(self._on_schedule_enabled)
         self.manual_panel.repeat_toggled.connect(self._on_repeat_toggled)
         self.manual_panel.interval_changed.connect(self._on_interval_changed)
 
+        self.account_panel.account_selected.connect(self._on_account_selected)
+        self.account_panel.request_add_account.connect(self._on_add_account)
+        self.account_panel.request_remove_account.connect(self._on_remove_account)
+        self.account_panel.request_remove_accounts.connect(self._on_remove_accounts)
+        self.account_panel.request_open_profile.connect(self._open_profile_dir)
+        self.account_panel.request_open_browser.connect(self._open_browser_for_account)
+        self.account_panel.request_batch_login.connect(self._batch_login_accounts)
+
+    # --- 상태 관리 ---
+
     def _current_user(self) -> str:
-        """현재 사용자 식별자 반환."""
         import getpass
+
         return getpass.getuser()
 
+    def _settings_file(self) -> Path:
+        return self.user_data_dir / "settings.json"
+
+    def _accounts_file(self) -> Path:
+        return self.database_path
+
     def _load_settings(self) -> None:
-        """사용자 설정 로드."""
-        settings_file = self.user_data_dir / "settings.json"
-        settings = load_settings(settings_file)
-        
-        # AI 모드 설정
-        self._set_ai_mode(settings.use_ai)
-        self._api_valid = bool(settings.api_key)
-        
-        # AI 패널 설정
-        if settings.api_key:
-            self.ai_control_panel.api_key_edit.setText(settings.api_key)
+        settings = load_settings(self._settings_file())
+        self.ai_control_panel.api_key_edit.setText(settings.api_key)
+        self.ai_control_panel.keyword_edit.setText(settings.keyword)
         self.ai_control_panel.model_combo.setCurrentText(settings.model)
-        if settings.keyword:
-            self.ai_control_panel.keyword_edit.setText(settings.keyword)
-        
-        # 수동 모드 패널 설정
-        if settings.manual_title:
-            self.manual_panel.manual_title_edit.setText(settings.manual_title)
-        if settings.manual_tags:
-            self.manual_panel.manual_tags_edit.setText(settings.manual_tags)
+        # 모드 설정은 나중에 강제로 설정하므로 여기서는 로드하지 않음
+        # self.header.set_mode(settings.use_ai)
+        # self._is_ai_mode = settings.use_ai
+        self.manual_panel._current_interval = settings.interval_minutes
+        self.manual_panel.update_repeat_status(settings.repeat_enabled, settings.interval_minutes)
+        self.manual_panel.manual_title_edit.setText(settings.manual_title)
+        self.manual_panel.manual_tags_edit.setText(settings.manual_tags)
+        self.manual_panel._current_schedule = settings.schedule_minutes
+        self.manual_panel._schedule_enabled = settings.schedule_enabled
+        self.manual_panel.schedule_toggle_btn.setChecked(settings.schedule_enabled)
+        self.manual_panel.schedule_toggle_btn.setText("ON" if settings.schedule_enabled else "OFF")
+        self.manual_panel.schedule_decrease_btn.setEnabled(settings.schedule_enabled)
+        self.manual_panel.schedule_increase_btn.setEnabled(settings.schedule_enabled)
+        self.manual_panel._update_schedule_display()
         if settings.image_file_path:
             self.manual_panel.image_file_edit.setText(settings.image_file_path)
-        
-        # 반복 설정
-        self.manual_panel.update_repeat_status(
-            settings.repeat_enabled, 
-            settings.interval_minutes, 
-            False
-        )
 
     def _save_settings(self) -> None:
-        """사용자 설정 저장 (debounced)."""
-        self._settings_save_timer.start(500)  # 500ms 후 저장
-
+        """설정 저장을 debounce로 처리 (성능 최적화)"""
+        # 타이머를 재시작하여 500ms 후에 실제 저장
+        self._settings_save_timer.stop()
+        self._settings_save_timer.start(500)
+    
     def _do_save_settings(self) -> None:
-<<<<<<< HEAD
         """실제 설정 저장 수행"""
         try:
             settings = UserSettings(
@@ -545,11 +555,11 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "계정 없음", "선택된 계정이 없습니다.")
             return
 
-        self._log(f"🔐 '{account_id}' 계정 로그인 상태 확인 중...")
+        self._log(f"'{account_id}' 계정용 브라우저 준비 중...")
 
         try:
             driver = create_chrome_driver(account.profile_dir)
-            self._log(f"✅ '{account_id}' 계정용 브라우저가 생성되었습니다.")
+            self._log(f"'{account_id}' 계정용 브라우저가 성공적으로 생성되었습니다.")
         except WebDriverException as exc:
             error_msg = f"브라우저 초기화 실패: {exc}"
             QtWidgets.QMessageBox.critical(self, "브라우저 오류", error_msg)
@@ -561,38 +571,27 @@ class MainWindow(QtWidgets.QMainWindow):
             self._log(f"❌ {error_msg}")
             return
 
-        # 브라우저 초기화 대기
+        # 드라이버는 워커에서 관리하므로 여기서는 저장하지 않음
+        
+        # 브라우저 초기화 대기 (비차단)
         self._non_blocking_wait_ms(2000)
-        self._log("🌐 네이버 접속 중...")
+        self._log("브라우저 초기화 완료, 네이버 메인 페이지로 이동 중...")
 
-        # 네이버 접속
+        # 먼저 간단한 URL로 연결 테스트
         try:
-            driver.get("https://www.naver.com/")
-            self._non_blocking_wait_ms(3000)
-            self._log("✅ 네이버 접속 완료")
+            self._log("네트워크 연결 테스트 중...")
+            driver.get("about:blank")
+            self._non_blocking_wait_ms(1000)
+            self._log("브라우저 네트워크 연결 확인 완료")
         except Exception as exc:
-            error_msg = f"네이버 접속 실패: {exc}"
+            error_msg = f"브라우저 네트워크 초기화 실패: {exc}"
             self._log(f"❌ {error_msg}")
             try:
                 driver.quit()
             except Exception:
                 pass
+            # 드라이버 정리
             return
-
-        # 로그인 상태 확인
-        try:
-            is_logged_in = self._check_login_status(driver)
-            if is_logged_in:
-                self._log(f"✅ '{account_id}' 계정이 이미 로그인된 상태입니다!")
-                self._log("💡 브라우저를 닫지 마세요. 이 상태에서 바로 워크플로우를 시작할 수 있습니다.")
-            else:
-                self._log(f"🔐 '{account_id}' 계정 로그인이 필요합니다.")
-                self._log("💡 수동으로 로그인한 후 일괄 로그인을 사용하여 세션을 저장하세요.")
-        except Exception as exc:
-            self._log(f"⚠️ 로그인 상태 확인 중 오류: {exc}")
-        
-        # 브라우저는 사용자가 직접 닫도록 유지
-        self._log("🌐 브라우저가 열렸습니다. 로그인 상태를 확인해보세요.")
 
         # 네이버 접속 시도 (여러 방법으로)
         naver_urls = [
@@ -701,14 +700,14 @@ class MainWindow(QtWidgets.QMainWindow):
             account.login_initialized = True
             self._accounts[account_id] = account
             self._save_accounts()
-            # UI 업데이트를 스레드 안전하게 처리
-            try:
-                # Qt 타이머를 사용하여 메인 스레드에서 UI 업데이트
-                QtCore.QTimer.singleShot(0, lambda: self._refresh_accounts_ui(account_id))
-            except Exception as e:
-                # UI 업데이트 실패 시 로그만 출력하고 계속 진행
-                self._log(f"UI 업데이트 실패 (무시): {e}")
-            self._log(f"✅ '{account_id}' 계정을 로그인된 상태로 저장했습니다.")
+            # UI 업데이트를 메인 스레드에서 처리
+            QtCore.QMetaObject.invokeMethod(
+                self, 
+                "_refresh_accounts_ui", 
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, account_id)
+            )
+            self._log(f"'{account_id}' 계정을 로그인된 상태로 표시했습니다.")
             return True
         return False
 
@@ -765,15 +764,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _check_current_logged_in_account(self, driver) -> Optional[str]:
         """현재 로그인된 계정 ID를 확인합니다."""
         try:
-            # 브라우저 연결 상태 확인
-            try:
-                driver.current_url
-            except Exception as e:
-                if "Connection refused" in str(e) or "NewConnectionError" in str(e):
-                    self._log("⚠️ 브라우저 연결이 끊어졌습니다.")
-                    return None
-                raise e
-            
             # 1단계: 먼저 페이지에서 실제 로그인 상태 확인
             try:
                 # 로그인 버튼이 있으면 로그인되지 않은 상태
@@ -1376,35 +1366,39 @@ class MainWindow(QtWidgets.QMainWindow):
         return WorkflowParams(
             keyword=self.ai_control_panel.keyword_edit.text().strip() or self.manual_panel.manual_title_edit.text().strip(),
             count=count,
-=======
-        """실제 설정 저장."""
-        settings_file = self.user_data_dir / "settings.json"
-        settings = UserSettings(
->>>>>>> 6594ea349b8db2941f8b477048bf2244f67ca142
             use_ai=self._is_ai_mode,
-            api_key=self.ai_control_panel.api_key_edit.text(),
+            api_key=self.ai_control_panel.api_key_edit.text().strip() or None,
             model=self.ai_control_panel.model_combo.currentText(),
-            keyword=self.ai_control_panel.keyword_edit.text(),
-            manual_title=self.manual_panel.manual_title_edit.text(),
-            manual_tags=self.manual_panel.manual_tags_edit.text(),
-            image_file_path=self.manual_panel.image_file_edit.text(),
-            repeat_enabled=self.manual_panel.repeat_toggle_btn.isChecked(),
-            interval_minutes=int(self.manual_panel.interval_value_label.text()),
-            schedule_enabled=self.manual_panel.schedule_toggle_btn.isChecked(),
-            schedule_minutes=int(self.manual_panel.schedule_value_label.text()),
+            manual_title=self.manual_panel.manual_title_edit.text().strip(),
+            manual_body=manual_body,
+            manual_tags=self.manual_panel.manual_tags_edit.text().strip(),
+            manual_file_path=self.manual_panel.manual_file_edit.text() or None,
+            image_file_path=self.manual_panel.image_file_edit.text() or None,
+            schedule_minutes=schedule_minutes,
+            naver_id=self._selected_account_id,
+            naver_profile_dir=str(self._accounts[self._selected_account_id].profile_dir) if self._selected_account_id else None,
         )
-        save_settings(settings_file, settings)
 
-    def _set_ai_mode(self, is_ai: bool) -> None:
-        """AI/수동 모드 전환."""
-        self._is_ai_mode = is_ai
-        self.header.set_mode(is_ai)
+    def _start_workflow(self) -> None:
+        if self._is_ai_mode and not self._api_valid:
+            QtWidgets.QMessageBox.warning(self, "입력 오류", "OpenAI 키 확인을 먼저 완료해주세요.")
+            return
+
+        # 수동 모드에서는 본문 파일이 반드시 필요
+        if not self._is_ai_mode:
+            from pathlib import Path as _Path
+            file_text = self.manual_panel.manual_file_edit.text().strip()
+            if not file_text or not _Path(file_text).exists():
+                QtWidgets.QMessageBox.warning(self, "입력 오류", "본문 파일을 선택해 주세요.")
+                return
+
+        # 체크된 계정 목록 확인
+        checked_accounts = self.account_panel.get_checked_accounts()
         
-        # 패널 활성화/비활성화
-        self.manual_panel.setEnabled(not is_ai)
-        self.ai_control_panel.set_ai_mode_enabled(is_ai)
+        # 로그인된 계정 목록 확인
+        logged_in_accounts = [account_id for account_id, account in self._accounts.items() 
+                            if account.login_initialized]
         
-<<<<<<< HEAD
         # 체크된 계정이 있으면 우선 사용, 없으면 로그인된 모든 계정 사용
         if checked_accounts:
             # 체크된 계정 중 로그인된 계정만 필터링
@@ -1452,18 +1446,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.repeat_panel.reset_progress()
 
         # 다중 계정 워크플로우 워커 시작
-        # 첫 번째 계정으로 브라우저 생성
-        if not self._driver and target_accounts:
-            first_account = target_accounts[0]
-            account = self._accounts[first_account]
-            try:
-                self._driver = create_chrome_driver(account.profile_dir)
-                self._log(f"✅ '{first_account}' 계정용 브라우저를 생성했습니다.")
-            except Exception as e:
-                self._log(f"❌ 브라우저 생성 실패: {e}")
-                QtWidgets.QMessageBox.warning(self, "브라우저 오류", f"브라우저를 생성할 수 없습니다:\n{e}")
-                return
-        
         self._worker = MultiAccountWorkflowWorker(
             params,
             target_accounts,
@@ -1576,58 +1558,54 @@ class MainWindow(QtWidgets.QMainWindow):
         # AI 패널 오버레이는 숨기지 않음 (수동 모드에서는 AI 패널이 비활성화되어야 함)
 
     # --- 테마 ---
-=======
-        # 설정 저장
-        self._save_settings()
->>>>>>> 6594ea349b8db2941f8b477048bf2244f67ca142
 
     def _toggle_theme(self) -> None:
-        """테마 전환."""
-        self._current_theme = "light" if self._current_theme == "dark" else "dark"
-        self._apply_theme(self._current_theme)
-        self._save_settings()
+        theme = "light" if self._current_theme == "dark" else "dark"
+        self._apply_theme(theme)
 
     def _apply_theme(self, theme: str) -> None:
-        """테마 적용."""
+        self._current_theme = theme
         theme_map = DARK_THEME if theme == "dark" else LIGHT_THEME
+        palette = QtGui.QPalette()
+        palette.setColor(QtGui.QPalette.Window, QtGui.QColor(theme_map["palette"]["window"]))
+        palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor(theme_map["palette"]["text"]))
+        palette.setColor(QtGui.QPalette.Base, QtGui.QColor(theme_map["palette"]["base"]))
+        palette.setColor(QtGui.QPalette.Text, QtGui.QColor(theme_map["palette"]["text"]))
+        palette.setColor(QtGui.QPalette.Button, QtGui.QColor(theme_map["palette"]["button"]))
+        palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(theme_map["palette"]["button_text"]))
+        palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(theme_map["palette"]["highlight"]))
+        palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(theme_map["palette"]["highlight_text"]))
+        QtWidgets.QApplication.instance().setPalette(palette)
+        self._load_stylesheet(theme_map)
         self.header.set_theme_icon(theme_map, theme == "dark")
         
-        # QSS 파일 로드
-        qss_file = self.app_root / "app" / "resources" / "styles" / "main.qss"
-        if qss_file.exists():
-            qss = qss_file.read_text(encoding="utf-8")
-        else:
-            qss = ""
-        
-        # 테마 변수 치환
+        # 계정 패널 테마 적용
+        self.account_panel.set_theme(theme)
+
+    def _load_stylesheet(self, theme_map: Dict[str, object]) -> None:
+        style_path = self.app_root / "app" / "resources" / "styles" / "main.qss"
+        if not style_path.exists():
+            return
+
+        qss = style_path.read_text(encoding="utf-8")
         replacements = {
-            "{{WINDOW_COLOR}}": str(theme_map["palette"]["window"]),
-            "{{TEXT_COLOR}}": str(theme_map["palette"]["text"]),
-            "{{BASE_COLOR}}": str(theme_map["palette"]["base"]),
-            "{{ALTERNATE_COLOR}}": str(theme_map["palette"]["alternate"]),
-            "{{BUTTON_COLOR}}": str(theme_map["palette"]["button"]),
-            "{{BUTTON_TEXT_COLOR}}": str(theme_map["palette"]["button_text"]),
-            "{{HIGHLIGHT_COLOR}}": str(theme_map["palette"]["highlight"]),
-            "{{HIGHLIGHT_TEXT_COLOR}}": str(theme_map["palette"]["highlight_text"]),
-            "{{CARD_COLOR}}": str(theme_map["card"]),
-            "{{INPUT_COLOR}}": str(theme_map["input"]),
-            "{{BORDER_COLOR}}": str(theme_map["border"]),
-            "{{PRIMARY_TEXT_COLOR}}": str(theme_map["primary_text"]),
-            "{{SECONDARY_TEXT_COLOR}}": str(theme_map["secondary_text"]),
-            "{{BACKGROUND_COLOR}}": str(theme_map["background"]),
-            "{{ACCENT_COLOR}}": str(theme_map["accent"]),
-            "{{ACCENT_HOVER_COLOR}}": str(theme_map["accent_hover"]),
-            "{{ACCENT_LIGHT_COLOR}}": str(theme_map["accent_light"]),
-            "{{ACCENT_DARK_COLOR}}": str(theme_map["accent_dark"]),
-            "{{ACCENT_DARKER_COLOR}}": str(theme_map["accent_darker"]),
-            "{{DANGER_COLOR}}": str(theme_map["danger"]),
-            "{{WARNING_COLOR}}": str(theme_map["warning"]),
-            "{{INFO_COLOR}}": str(theme_map["info"]),
-            "{{THEME_ICON_COLOR}}": str(theme_map["theme_icon"]),
-            "{{THEME_ICON_ACTIVE_COLOR}}": str(theme_map["theme_icon_active"]),
-            "{{BG_ALT_COLOR}}": str(theme_map["bg_alt"]),
+            "{{BACKGROUND}}": theme_map["background"],
+            "{{CARD}}": theme_map["card"],
+            "{{INPUT_BG}}": theme_map.get("input", theme_map["card"]),
+            "{{BORDER}}": theme_map["border"],
+            "{{PRIMARY}}": theme_map["primary_text"],
+            "{{SECONDARY}}": theme_map["secondary_text"],
+            "{{ACCENT}}": theme_map["accent"],
+            "{{ACCENT_HOVER}}": theme_map["accent_hover"],
+            "{{ACCENT_LIGHT}}": theme_map["accent_light"],
+            "{{ACCENT_DARK}}": theme_map.get("accent_dark", theme_map["accent"]),
+            "{{ACCENT_DARKER}}": theme_map.get("accent_darker", theme_map["accent"]),
+            "{{DANGER}}": theme_map["danger"],
+            "{{BG_ALT}}": theme_map.get("bg_alt", theme_map["card"]),
+            "{{THEME_ICON}}": theme_map.get("theme_icon", theme_map["accent"]),
+            "{{THEME_ICON_ACTIVE}}": theme_map.get("theme_icon_active", "#0b1120"),
         }
-        
+
         for token, value in replacements.items():
             qss = qss.replace(token, str(value))
 
@@ -1644,66 +1622,11 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QApplication.processEvents()
             time.sleep(0.01)  # 10ms씩 대기
 
-    # --- 시그널 핸들러 ---
 
-    def _on_api_key_changed(self, text: str) -> None:
-        """API 키 변경 시."""
-        self.ai_control_panel.set_validate_enabled(len(text.strip()) > 0)
-        self._save_settings()
-
-    def _on_keyword_changed(self, text: str) -> None:
-        """키워드 변경 시."""
-        self._save_settings()
-
-    def _on_model_changed(self, text: str) -> None:
-        """모델 변경 시."""
-        self._save_settings()
-
-    def _on_count_changed(self, count: int) -> None:
-        """포스팅 개수 변경 시."""
-        self._save_settings()
-
-    def _on_manual_title_changed(self, text: str) -> None:
-        """수동 제목 변경 시."""
-        self._save_settings()
-
-    def _on_manual_tags_changed(self, text: str) -> None:
-        """수동 태그 변경 시."""
-        self._save_settings()
-
-    def _on_manual_file_selected(self, path: Path) -> None:
-        """수동 파일 선택 시."""
-        self.manual_panel.manual_file_edit.setText(str(path))
-        self._save_settings()
-
-    def _on_manual_image_selected(self, path: Path) -> None:
-        """수동 이미지 선택 시."""
-        self.manual_panel.image_file_edit.setText(str(path))
-        self._save_settings()
-
-    def _on_schedule_changed(self, minutes: int) -> None:
-        """예약 시간 변경 시."""
-        self._save_settings()
-
-    def _on_schedule_enabled(self, enabled: bool) -> None:
-        """예약 활성화 변경 시."""
-        self._save_settings()
-
-    def _on_repeat_toggled(self, enabled: bool) -> None:
-        """반복 실행 토글 시."""
-        self._save_settings()
-
-    def _on_interval_changed(self, minutes: int) -> None:
-        """반복 간격 변경 시."""
-        self._save_settings()
-
-    def _validate_api_key(self) -> None:
-        """API 키 유효성 검사."""
-        api_key = self.ai_control_panel.api_key_edit.text().strip()
-        if not api_key:
-            self.ai_control_panel.set_api_status("API 키를 입력하세요", "error")
+    def _batch_login_accounts(self, account_ids: list[str]) -> None:
+        """선택된 계정들에 대해 순차적으로 일괄 로그인을 수행합니다. (워커 스레드 사용)"""
+        if not account_ids:
             return
-<<<<<<< HEAD
         
         # 이미 실행 중인 워커가 있으면 무시
         if self._batch_login_worker and self._batch_login_worker.isRunning():
@@ -1818,9 +1741,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._log(f"   - {account_id}: {reason}")
         self._log("=" * 70)
         
-        # 계정 UI 즉시 업데이트
-        self._refresh_accounts_ui()
-        
         # UI 재활성화
         self.account_panel.enable_controls(True)
         self.manual_panel.enable_controls(True)
@@ -1866,20 +1786,20 @@ class MainWindow(QtWidgets.QMainWindow):
         
         driver = None
         try:
-            # 브라우저 생성 (안정적인 방식)
-            log_func(f"🔐 '{account_id}' 계정 로그인 상태 확인 중...")
+            # 브라우저 생성
+            log_func(f"'{account_id}' 계정용 브라우저 생성 중...")
             driver = create_chrome_driver(account.profile_dir)
-            log_func(f"✅ '{account_id}' 계정용 브라우저가 생성되었습니다.")
+            log_func(f"✅ 브라우저 생성 완료")
             
-            # 브라우저 초기화 대기
-            time.sleep(2)
-            log_func("🌐 네이버 접속 중...")
+            # 네이버 메인 페이지 접속 (빠른 접속)
+            log_func("네이버 접속 중...")
             
-            # 네이버 접속 (안정적인 방식)
             try:
                 driver.get("https://www.naver.com/")
-                time.sleep(3)
-                log_func("✅ 네이버 접속 완료")
+                WebDriverWait(driver, 10).until(  # 15초 → 10초로 단축
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                log_func("✅ 접속 OK")
             except Exception as exc:
                 log_func(f"❌ 네이버 접속 실패: {exc}")
                 try:
@@ -1897,67 +1817,26 @@ class MainWindow(QtWidgets.QMainWindow):
                     pass
                 return "stopped"
             
-            # 로그인 상태 확인 (안정적인 방식)
-            log_func("🔍 로그인 상태 확인 중...")
-            try:
-                # 쿠키 기반 로그인 상태 확인 (가장 확실한 방법)
-                cookies = {cookie.get("name") for cookie in driver.get_cookies()}
-                if {"NID_SES", "NID_AUT", "NID_JKL"}.intersection(cookies):
-                    log_func(f"✅ '{account_id}' 계정이 이미 로그인된 상태입니다!")
-                    self._mark_account_logged_in(account_id)
-                    log_func(f"💾 '{account_id}' 계정 세션을 저장했습니다.")
-                    try:
-                        driver.quit()
-                    except:
-                        pass
-                    log_func(f"🌐 브라우저가 닫히면서 정상적으로 로그인이 완료되었습니다.")
-                    return "success"
-                
-                # UI 요소 기반 로그인 상태 확인
-                is_logged_in = self._check_login_status(driver)
-                if is_logged_in:
-                    log_func(f"✅ '{account_id}' 계정이 이미 로그인된 상태입니다!")
-                    self._mark_account_logged_in(account_id)
-                    log_func(f"💾 '{account_id}' 계정 세션을 저장했습니다.")
-                    try:
-                        driver.quit()
-                    except:
-                        pass
-                    log_func(f"🌐 브라우저가 닫히면서 정상적으로 로그인이 완료되었습니다.")
-                    return "success"
-                else:
-                    log_func(f"🔐 '{account_id}' 계정 로그인이 필요합니다.")
-            except Exception as exc:
-                log_func(f"⚠️ 로그인 상태 확인 중 오류: {exc}")
-                log_func("🔐 로그인을 시도합니다...")
+            # 로그인 상태 확인 (빠른 확인)
+            current_logged_in_account = self._check_current_logged_in_account(driver)
             
-            # 다른 계정 로그아웃 확인
-            try:
-                current_logged_in_account = self._check_current_logged_in_account(driver)
-                if current_logged_in_account is None:
-                    # 브라우저 연결이 끊어진 경우
-                    log_func("⚠️ 브라우저 연결이 끊어졌습니다. 새 브라우저를 생성합니다.")
-                    try:
-                        driver.quit()
-                    except:
-                        pass
-                    # 새 브라우저 생성
-                    driver = create_chrome_driver(account.profile_dir)
-                    log_func("✅ 새 브라우저 생성 완료")
-                    # 네이버 재접속
-                    driver.get("https://www.naver.com/")
-                    time.sleep(3)
-                    log_func("✅ 네이버 재접속 완료")
-                elif current_logged_in_account and current_logged_in_account != account_id:
-                    # 다른 계정이 로그인되어 있음 - 로그아웃
-                    log_func(f"⚠️ 다른 계정 '{current_logged_in_account}'이 로그인되어 있습니다. 로그아웃을 시도합니다.")
-                    if self._logout_current_account(driver):
-                        log_func("✅ 기존 계정 로그아웃 완료")
-                    else:
-                        log_func("⚠️ 로그아웃 실패, 계속 진행합니다.")
-            except Exception as exc:
-                log_func(f"⚠️ 다른 계정 확인 중 오류: {exc}")
-                log_func("🔐 로그인을 시도합니다...")
+            if current_logged_in_account == account_id:
+                # 이미 로그인되어 있음
+                log_func(f"✅ '{account_id}' 이미 로그인됨 (건너뜀)")
+                self._mark_account_logged_in(account_id)
+                try:
+                    driver.quit()
+                except:
+                    pass
+                return "skipped"
+                
+            elif current_logged_in_account and current_logged_in_account != account_id:
+                # 다른 계정이 로그인되어 있음 - 로그아웃
+                log_func(f"⚠️ 다른 계정 '{current_logged_in_account}'이 로그인되어 있습니다. 로그아웃을 시도합니다.")
+                if self._logout_current_account(driver):
+                    log_func("✅ 기존 계정 로그아웃 완료")
+                else:
+                    log_func("⚠️ 로그아웃 실패, 계속 진행합니다.")
             
             # 자동 로그인 수행 (빠른 로그인)
             log_func(f"🔐 '{account_id}' 계정 자동 로그인을 시작합니다...")
@@ -1993,17 +1872,14 @@ class MainWindow(QtWidgets.QMainWindow):
                     pass
                 return "로그인 프로세스 오류"
             
-            # 로그인 완료 대기 (CAPTCHA 무제한 대기)
-            log_func("⏳ 로그인 완료 대기 중... (CAPTCHA 무제한 대기)")
+            # 로그인 완료 대기 (빠른 처리)
+            log_func("⏳ 로그인 완료 대기 중... (최대 15초)")
             log_func("💡 CAPTCHA 나오면 즉시 풀어주세요!")
-            log_func("🛑 정지 버튼을 누르면 언제든 중단할 수 있습니다.")
             login_success = False
             
             captcha_detected = False
-            attempt = 0
-            while True:  # 무제한 대기
-                time.sleep(3)  # 3초마다 체크
-                attempt += 1
+            for attempt in range(10):  # 10회 * 1.5초 = 15초 (빠른 처리)
+                time.sleep(1.5)  # 2초 → 1.5초로 단축
                 
                 # 중단 요청 확인
                 if should_stop_func():
@@ -2040,13 +1916,11 @@ class MainWindow(QtWidgets.QMainWindow):
                             log_func("✅ CAPTCHA 통과! 로그인 완료")
                         break
                     
-                    # 진행 상황 알림 (CAPTCHA 중일 때만)
-                    if attempt % 10 == 0 and attempt > 0:  # 30초마다
-                        elapsed = attempt * 3
+                    # 진행 상황 알림 (초고속 모드에서는 최소화)
+                    if attempt % 3 == 0 and attempt > 0:  # 9초마다
+                        elapsed = (attempt + 1) * 3
                         if captcha_detected:
-                            log_func(f"  ⏰ CAPTCHA 대기 중... ({elapsed}초)")
-                        else:
-                            log_func(f"  ⏰ 로그인 대기 중... ({elapsed}초)")
+                            log_func(f"  ⏰ CAPTCHA ({elapsed}초)")
                         
                 except WebDriverException:
                     log_func("❌ 브라우저 연결이 끊어졌습니다.")
@@ -2056,221 +1930,150 @@ class MainWindow(QtWidgets.QMainWindow):
                     continue
             
             if login_success:
-                log_func(f"✅ '{account_id}' 로그인 완료!")
+                log_func(f"✅ '{account_id}' OK")
                 self._mark_account_logged_in(account_id)
-                log_func(f"💾 '{account_id}' 계정 세션을 저장했습니다.")
-                
-                # 브라우저를 안전하게 닫기
                 try:
                     driver.quit()
-                    log_func(f"🌐 브라우저가 닫히면서 정상적으로 로그인이 완료되었습니다.")
-                except Exception as e:
-                    log_func(f"⚠️ 브라우저 종료 중 오류 (무시): {e}")
-                
+                except:
+                    pass
                 return "success"
             else:
                 # 타임아웃 시에도 쿠키 재확인
                 try:
                     cookies = {cookie.get("name") for cookie in driver.get_cookies()}
                     if {"NID_SES", "NID_AUT", "NID_JKL"}.intersection(cookies):
-                        log_func(f"✅ '{account_id}' 로그인 완료! (최종확인)")
+                        log_func(f"✅ '{account_id}' OK (최종확인)")
                         self._mark_account_logged_in(account_id)
-                        log_func(f"💾 '{account_id}' 계정 세션을 저장했습니다.")
-                        
-                        # 브라우저를 안전하게 닫기
                         try:
                             driver.quit()
-                            log_func(f"🌐 브라우저가 닫히면서 정상적으로 로그인이 완료되었습니다.")
-                        except Exception as e:
-                            log_func(f"⚠️ 브라우저 종료 중 오류 (무시): {e}")
-                        
+                        except:
+                            pass
                         return "success"
                 except:
                     pass
                 
-                log_func(f"❌ '{account_id}' 실패 (로그인 미완료)")
+                log_func(f"❌ '{account_id}' 실패 (15초 초과)")
                 try:
                     driver.quit()
                 except:
                     pass
-                return "로그인 실패"
+                return "로그인 실패 (15초 초과)"
                 
         except Exception as exc:
             error_msg = str(exc)[:50]
             log_func(f"❌ '{account_id}' 계정 로그인 중 오류 발생: {error_msg}")
             
             # 브라우저 정리
-=======
-
-        self.ai_control_panel.set_api_status("검증 중...", "info")
-        self.ai_control_panel.set_validate_enabled(False)
-
-        # 백그라운드에서 API 키 검증
-        self._validation_thread = QtCore.QThread()
-        self._validation_thread.run = lambda: self._do_validate_api_key(api_key)
-        self._validation_thread.start()
-
-    def _do_validate_api_key(self, api_key: str) -> None:
-        """실제 API 키 검증."""
-        try:
-            client = OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=5
-            )
-            
-            if response.choices:
-                QtCore.QMetaObject.invokeMethod(
-                    self, 
-                    "_on_api_validation_success", 
-                    QtCore.Qt.QueuedConnection
-                )
-            else:
-                QtCore.QMetaObject.invokeMethod(
-                    self, 
-                    "_on_api_validation_failure", 
-                    QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(str, "API 응답이 비어있습니다")
-                )
-        except Exception as e:
-            QtCore.QMetaObject.invokeMethod(
-                self, 
-                "_on_api_validation_failure", 
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(str, str(e))
-            )
-
-    def _on_api_validation_success(self) -> None:
-        """API 키 검증 성공."""
-        self._api_valid = True
-        self.ai_control_panel.set_api_status("✅ 유효한 API 키입니다", "success")
-        self.ai_control_panel.set_validate_enabled(True)
-        self._save_settings()
-
-    def _on_api_validation_failure(self, error: str) -> None:
-        """API 키 검증 실패."""
-        self._api_valid = False
-        self.ai_control_panel.set_api_status(f"❌ {error}", "error")
-        self.ai_control_panel.set_validate_enabled(True)
-
-    def _start_automation(self) -> None:
-        """자동화 시작."""
-        if self._is_ai_mode and not self._api_valid:
-            QtWidgets.QMessageBox.warning(self, "API 키 필요", "AI 모드를 사용하려면 유효한 API 키가 필요합니다.")
-            return
-
-        # 워크플로우 파라미터 생성
-        params = WorkflowParams(
-            keyword=self.ai_control_panel.keyword_edit.text() if self._is_ai_mode else self.manual_panel.manual_title_edit.text(),
-            count=self.ai_control_panel.count_group.checkedId() if self._is_ai_mode else 1,
-            use_ai=self._is_ai_mode,
-            api_key=self.ai_control_panel.api_key_edit.text() if self._is_ai_mode else "",
-            model=self.ai_control_panel.model_combo.currentText() if self._is_ai_mode else "",
-            manual_title=self.manual_panel.manual_title_edit.text(),
-            manual_body=self._load_manual_body(),
-            manual_tags=self.manual_panel.manual_tags_edit.text(),
-            manual_file_path=self.manual_panel.manual_file_edit.text(),
-            image_file_path=self.manual_panel.image_file_edit.text(),
-            schedule_minutes=int(self.manual_panel.schedule_value_label.text()) if self.manual_panel.schedule_toggle_btn.isChecked() else 0,
-            naver_id="",  # 계정 관리 제거
-            naver_profile_dir="",  # 계정 관리 제거
-        )
-
-        # 워크플로우 워커 생성 및 시작
-        self._worker = WorkflowWorker(
-            params=params,
-            driver=None,  # 계정 관리 제거
-            base_dir=self.base_dir,
-            automation_steps_per_post=AUTOMATION_STEPS_PER_POST,
-        )
-
-        # 시그널 연결
-        self._worker.finished_signal.connect(self._on_workflow_finished)
-        self._worker.error_signal.connect(self._on_workflow_error)
-        self._worker.progress_signal.connect(self._on_workflow_progress)
-        self._worker.percent_signal.connect(self._on_workflow_percent)
-        self._worker.status_signal.connect(self._on_workflow_status)
-        self._worker.post_saved_signal.connect(self._on_post_saved)
-
-        # UI 상태 변경
-        self.ai_control_panel.set_controls_enabled(False)
-        self.manual_panel.enable_controls(False)
-        self.repeat_panel.reset_progress()
-
-        # 워크플로우 시작
-        self._worker.start()
-
-    def _stop_automation(self) -> None:
-        """자동화 중지."""
-        if self._worker and self._worker.isRunning():
-            self._worker.request_stop()
-            self.repeat_panel.append_log("⏹️ 자동화 중지 요청됨...")
-
-    def _load_manual_body(self) -> str:
-        """수동 본문 로드."""
-        file_path = self.manual_panel.manual_file_edit.text()
-        if not file_path:
-            return ""
-        
-        try:
-            return Path(file_path).read_text(encoding="utf-8")
-        except Exception as e:
-            self.repeat_panel.append_log(f"❌ 파일 읽기 오류: {e}")
-            return ""
-
-    def _on_workflow_finished(self, driver) -> None:
-        """워크플로우 완료."""
-        self.ai_control_panel.set_controls_enabled(True)
-        self.manual_panel.enable_controls(True)
-        self.repeat_panel.append_log("🎉 자동화 완료!")
-        
-        if driver:
->>>>>>> 6594ea349b8db2941f8b477048bf2244f67ca142
             try:
-                driver.quit()
-            except Exception:
+                if self._driver:
+                    self._driver.quit()
+                    self._non_blocking_wait_ms(1000)
+            except:
                 pass
-
-    def _on_workflow_error(self, error: str) -> None:
-        """워크플로우 오류."""
-        self.ai_control_panel.set_controls_enabled(True)
-        self.manual_panel.enable_controls(True)
-        self.repeat_panel.set_error_state(error)
-        self.repeat_panel.append_log(f"❌ 오류: {error}")
-
-    def _on_workflow_progress(self, message: str, completed: bool) -> None:
-        """워크플로우 진행 상황."""
-        self.repeat_panel.append_log(message)
-
-    def _on_workflow_percent(self, percent: int) -> None:
-        """워크플로우 진행률."""
-        self.repeat_panel.progress_bar.setValue(percent)
-
-    def _on_workflow_status(self, status: str) -> None:
-        """워크플로우 상태."""
-        self.repeat_panel.update_status(status)
-
-    def _on_post_saved(self, title: str, url: str) -> None:
-        """포스트 저장됨."""
-        self.repeat_panel.add_post_to_history(title, url)
+            self._driver = None
+            
+            return error_msg
 
     def _cleanup_browser_sessions(self) -> None:
-        """브라우저 세션 정리."""
-        self.repeat_panel.append_log("🧹 브라우저 세션 정리 중...")
-        # 계정 관리 제거로 인해 브라우저 정리 기능 단순화
-        self.repeat_panel.append_log("✅ 브라우저 세션 정리 완료")
+        """브라우저를 완전히 초기화합니다."""
+        from app.core.automation.naver_publisher import _cleanup_chrome_processes, _cleanup_profile_locks
+        
+        # 확인 메시지 표시
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "브라우저 정리",
+            "🔧 브라우저를 완전히 초기화합니다.\n\n"
+            "⚠️ 현재 열린 브라우저가 모두 종료됩니다!\n"
+            "⚠️ 다음 실행 시 새로 브라우저를 열어야 합니다.\n\n"
+            "브라우저 오류 해결에 도움이 됩니다.\n"
+            "계속하시겠습니까?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes
+        )
+        
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        
+        self._log("🔧 브라우저 완전 초기화를 시작합니다...")
+        
+        try:
+            # 현재 브라우저 종료
+            if self._driver:
+                try:
+                    self._driver.quit()
+                    self._driver = None
+                    self._log("✅ 현재 브라우저 종료 완료")
+                except Exception as e:
+                    self._log(f"⚠️ 브라우저 종료 중 오류 (무시): {e}")
+            
+            # Chrome 프로세스 완전 정리
+            _cleanup_chrome_processes()
+            self._log("✅ Chrome 프로세스 정리 완료")
+            
+            # 모든 계정의 프로필 락 파일 정리
+            cleaned_profiles = 0
+            for account in self._accounts.values():
+                _cleanup_profile_locks(account.profile_dir)
+                cleaned_profiles += 1
+            
+            self._log(f"✅ {cleaned_profiles}개 계정 프로필 락 파일 정리 완료")
+            self._log("✅ 브라우저 완전 초기화 완료")
+            
+            QtWidgets.QMessageBox.information(
+                self,
+                "브라우저 초기화 완료", 
+                "✅ 브라우저 초기화가 완료되었습니다!\n\n"
+                "✔ 현재 브라우저 종료\n"
+                "✔ Chrome 프로세스 완전 정리\n"
+                f"✔ {cleaned_profiles}개 계정 프로필 락 파일 정리\n\n"
+                "이제 새로 브라우저를 열어보세요."
+            )
+            
+        except Exception as e:
+            self._log(f"❌ 브라우저 초기화 중 오류: {e}")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "브라우저 초기화 오류",
+                f"브라우저 초기화 중 오류가 발생했습니다:\n{e}\n\n"
+                "수동으로 Chrome을 완전히 종료한 후 다시 시도해주세요."
+            )
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
+        """프로그램 종료 시 리소스 정리"""
+        try:
+            # 저장 대기 중인 설정이 있으면 즉시 저장
+            if hasattr(self, '_settings_save_timer') and self._settings_save_timer.isActive():
+                self._settings_save_timer.stop()
+                self._do_save_settings()
+            if hasattr(self, '_accounts_save_timer') and self._accounts_save_timer.isActive():
+                self._accounts_save_timer.stop()
+                self._do_save_accounts()
+            
+            # 워커 스레드 정리
+            if self._worker and self._worker.isRunning():
+                self._worker.request_stop()
+                self._worker.wait(3000)  # 최대 3초 대기
+            
+            # 브라우저 정리
+            if self._driver:
+                try:
+                    self._driver.quit()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"프로그램 종료 시 리소스 정리 중 오류 (무시됨): {e}")
+        
+        super().closeEvent(event)
 
     def _show_tips(self) -> None:
-        """팁 표시."""
         QtWidgets.QMessageBox.information(
             self,
             "Tips",
             "1. AI 모드에서 키 확인 후 자동화를 시작하세요.\n"
             "2. 수동 모드에서는 제목과 본문 파일을 선택하세요.\n"
-            "3. 브라우저 오류 발생 시 '브라우저 정리' 기능을 사용하세요.",
+            "3. 계정을 추가한 뒤 브라우저 열기를 통해 쿠키를 저장하면 좋습니다.\n"
+            "4. 브라우저 오류 발생 시 '브라우저 정리' 기능을 사용하세요.",
         )
-<<<<<<< HEAD
 
 
 class MultiAccountWorkflowWorker(QtCore.QThread):
@@ -2353,23 +2156,21 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                         naver_profile_dir=str(account.profile_dir),
                     )
 
-                    # 각 계정별로 새로운 브라우저 생성 (연결 안정성)
-                    self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
-                    
-                    # 기존 브라우저가 있으면 종료
-                    if hasattr(self, 'driver') and self.driver:
+                    # 첫 번째 계정에서만 브라우저 생성
+                    if index == 0:
+                        self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
+                        
+                        # 새 브라우저 생성 (계정별 프로필 사용)
                         try:
-                            self.driver.quit()
-                        except:
-                            pass
-                    
-                    # 새 브라우저 생성 (계정별 프로필 사용)
-                    try:
-                        self.driver = create_chrome_driver(account.profile_dir)
-                        self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
-                    except Exception as exc:
-                        self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
-                        continue
+                            self.driver = create_chrome_driver(account.profile_dir)
+                            self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
+                        except Exception as exc:
+                            self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
+                            continue
+                    else:
+                        # 이후 계정들은 기존 브라우저 재사용
+                        self.progress_signal.emit(f"🔄 '{account_id}' 계정으로 전환 중...", False)
+                        # 브라우저는 그대로 유지하고 계정 전환만 수행
 
                     # 계정별 워크플로우 실행
                     worker = WorkflowWorker(
@@ -2416,14 +2217,6 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
         except Exception as exc:
             self.error_signal.emit(f"다중 계정 워크플로우 오류: {exc}")
             return
-        finally:
-            # 워크플로우 완료 후 브라우저 정리
-            if hasattr(self, 'driver') and self.driver:
-                try:
-                    self.driver.quit()
-                    self.driver = None
-                except:
-                    pass
 
         if self.infinite_loop:
             self.progress_signal.emit("🛑 무한 반복 모드가 중단되었습니다.", True)
@@ -2432,5 +2225,3 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
         self.finished_signal.emit(self.driver)
 
 
-=======
->>>>>>> 6594ea349b8db2941f8b477048bf2244f67ca142
