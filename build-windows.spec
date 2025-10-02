@@ -5,10 +5,11 @@ block_cipher = None
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=[],
     datas=[
         ('app/resources/styles/main.qss', 'app/resources/styles'),
+        ('app', 'app'),  # 전체 app 디렉토리 포함
     ],
     hiddenimports=[
         'PyQt5.QtCore',
@@ -25,6 +26,28 @@ a = Analysis(
         'requests',
         'dotenv',
         'sqlite3',
+        # 앱 모듈들 명시적 포함
+        'app',
+        'app.core',
+        'app.core.automation',
+        'app.core.automation.naver_publisher',
+        'app.core.constants',
+        'app.core.models',
+        'app.core.preferences',
+        'app.core.services',
+        'app.core.services.content_service',
+        'app.core.theme',
+        'app.core.workflow',
+        'app.ui',
+        'app.ui.components',
+        'app.ui.components.header_bar',
+        'app.ui.components.ai_control_panel',
+        'app.ui.components.mode_panels',
+        'app.ui.components.repeat_panel',
+        'app.ui.components.account_panel',
+        'app.ui.components.status_bar',
+        'app.ui.pages',
+        'app.ui.pages.main_window',
     ],
     hookspath=[],
     hooksconfig={},
