@@ -151,11 +151,13 @@ class RepeatPanel(QtWidgets.QWidget):
         """생성된 글 목록에 포스트를 추가합니다."""
         # URL 정보와 함께 저장 (향후 더블클릭으로 열기 위해)
         if url:
-            item_text = f"{title}"
+            item_text = f"{title} 🔗"
             item = QtWidgets.QListWidgetItem(item_text)
             item.setData(QtCore.Qt.UserRole, url)  # URL을 UserRole로 저장
+            item.setToolTip(f"더블클릭하여 열기\nURL: {url}")
         else:
             item = QtWidgets.QListWidgetItem(title)
+            item.setToolTip("URL을 가져오지 못했습니다")
         
         self.history_list.addItem(item)
 
@@ -169,12 +171,16 @@ class RepeatPanel(QtWidgets.QWidget):
             try:
                 # 백그라운드에서 브라우저 열기 (비블로킹)
                 QtCore.QTimer.singleShot(0, lambda: webbrowser.open(url))
-                self.append_log(f"🌐 게시물 열기: {item.text()}")
+                # 제목에서 🔗 아이콘 제거하여 로그에 표시
+                clean_title = item.text().replace(" 🔗", "")
+                self.append_log(f"🌐 게시물 열기: {clean_title}")
+                self.append_log(f"🔗 URL: {url}")
             except Exception as e:
                 self.append_log(f"❌ 게시물 열기 실패: {str(e)}")
         else:
             # URL이 없는 경우 알림
-            self.append_log(f"⚠️ 게시물 URL이 없습니다: {item.text()}")
+            clean_title = item.text().replace(" 🔗", "")
+            self.append_log(f"⚠️ 게시물 URL이 없습니다: {clean_title}")
 
 
 

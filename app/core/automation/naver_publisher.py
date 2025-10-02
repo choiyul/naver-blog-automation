@@ -80,23 +80,19 @@ def _cmd_key():
 
 
 def _cleanup_chrome_processes() -> None:
-    """Chrome 프로세스를 완전히 정리합니다."""
+    """Chrome 프로세스를 정리합니다 (다른 브라우저 창 보호)."""
     try:
+        # ChromeDriver 프로세스만 정리 (다른 Chrome 창 보호)
         if _is_windows():
-            # Windows에서 Chrome 프로세스 종료
-            subprocess.run(['taskkill', '/f', '/im', 'chrome.exe'], 
-                         capture_output=True, text=True, timeout=10)
             subprocess.run(['taskkill', '/f', '/im', 'chromedriver.exe'], 
                          capture_output=True, text=True, timeout=10)
         else:
-            # macOS/Linux에서 Chrome 프로세스 종료
-            subprocess.run(['pkill', '-f', 'Google Chrome'], 
-                         capture_output=True, text=True, timeout=10)
             subprocess.run(['pkill', '-f', 'chromedriver'], 
                          capture_output=True, text=True, timeout=10)
         time.sleep(1)  # 프로세스 종료 대기
+        LOGGER.debug("ChromeDriver 프로세스 정리 완료 (다른 Chrome 창 보호)")
     except Exception as e:
-        LOGGER.debug(f"Chrome 프로세스 정리 중 오류 (무시됨): {e}")
+        LOGGER.debug(f"ChromeDriver 프로세스 정리 중 오류 (무시됨): {e}")
 
 def _cleanup_profile_locks(user_data_dir: Path) -> None:
     """프로필 디렉토리의 프로세스 락 파일만 정리합니다 (로그인 세션 보존)."""
@@ -154,10 +150,16 @@ def create_chrome_driver(user_data_dir: Path, retry_count: int = 3) -> webdriver
             # 2단계: 프로필 락 파일 정리
             _cleanup_profile_locks(user_data_dir)
             
-            # 3단계: Chrome 옵션 설정 (CAPTCHA 우회 최적화)
+            # 3단계: Chrome 옵션 설정 (세션 저장 가능)
             chrome_options = Options()
             chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
             chrome_options.add_argument("--profile-directory=Default")
+            
+            # 세션 저장을 위한 설정 (게스트 모드 제거)
+            chrome_options.add_argument("--no-first-run")
+            chrome_options.add_argument("--no-default-browser-check")
+            chrome_options.add_argument("--disable-web-security")
+            chrome_options.add_argument("--disable-features=VizDisplayCompositor")
             
             # 자동화 감지 우회 (가장 중요!)
             chrome_options.add_argument("--disable-blink-features=AutomationControlled")
@@ -1565,37 +1567,10 @@ def _get_published_blog_url(driver: webdriver.Chrome) -> Optional[str]:
     try:
         LOGGER.info("발행된 게시물 URL 확인 중...")
         
-        # 발행 완료 대기 (최대 10초)
-        time.sleep(3)
+        # 발행 완료 대기 (더 긴 대기 시간)
+        time.sleep(5)
         
-        # 방법 1: 발행 완료 메시지에서 URL 찾기
-        try:
-            # 발행 완료 팝업이나 메시지에서 링크 찾기
-            url_selectors = [
-                # 발행 완료 팝업 내 링크
-                "a[href*='blog.naver.com']",
-                ".se-popup a[href*='naver.com']",
-                ".publish-complete a[href*='blog']",
-                # 일반적인 블로그 링크
-                "a[href*='/PostView.naver']",
-                "a[href*='/PostList.naver']",
-            ]
-            
-            for selector in url_selectors:
-                try:
-                    links = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for link in links:
-                        href = link.get_attribute("href")
-                        if href and ("blog.naver.com" in href or "PostView.naver" in href):
-                            LOGGER.info(f"발행 완료 팝업에서 URL 발견: {href}")
-                            return href
-                except Exception:
-                    continue
-                    
-        except Exception as e:
-            LOGGER.debug(f"발행 완료 팝업에서 URL 찾기 실패: {e}")
-        
-        # 방법 2: 현재 페이지 URL 확인
+        # 방법 1: 현재 페이지 URL 확인 (가장 확실한 방법)
         try:
             current_url = driver.current_url
             LOGGER.info(f"현재 페이지 URL: {current_url}")
@@ -1608,15 +1583,46 @@ def _get_published_blog_url(driver: webdriver.Chrome) -> Optional[str]:
         except Exception as e:
             LOGGER.debug(f"현재 URL 확인 실패: {e}")
         
+        # 방법 2: 발행 완료 메시지에서 URL 찾기
+        try:
+            # 발행 완료 팝업이나 메시지에서 링크 찾기
+            url_selectors = [
+                # 발행 완료 팝업 내 링크
+                "a[href*='blog.naver.com']",
+                ".se-popup a[href*='naver.com']",
+                ".publish-complete a[href*='blog']",
+                # 일반적인 블로그 링크
+                "a[href*='/PostView.naver']",
+                "a[href*='/PostList.naver']",
+                # 추가 선택자들
+                "a[href*='PostView']",
+                "a[href*='logNo=']",
+                ".se-popup a",
+                ".publish-complete a",
+            ]
+            
+            for selector in url_selectors:
+                try:
+                    links = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for link in links:
+                        href = link.get_attribute("href")
+                        if href and ("blog.naver.com" in href or "PostView.naver" in href or "logNo=" in href):
+                            LOGGER.info(f"발행 완료 팝업에서 URL 발견: {href}")
+                            return href
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            LOGGER.debug(f"발행 완료 팝업에서 URL 찾기 실패: {e}")
+        
         # 방법 3: JavaScript로 최신 포스트 URL 가져오기
         try:
-            # 네이버 블로그 관리 페이지로 이동하여 최신 글 확인
             script = """
             // 최근 발행된 글 링크 찾기
-            var links = document.querySelectorAll('a[href*="PostView"], a[href*="logNo="]');
+            var links = document.querySelectorAll('a[href*="PostView"], a[href*="logNo="], a[href*="blog.naver.com"]');
             for (var i = 0; i < links.length; i++) {
                 var href = links[i].href;
-                if (href && href.includes('blog.naver.com')) {
+                if (href && (href.includes('blog.naver.com') || href.includes('PostView') || href.includes('logNo='))) {
                     return href;
                 }
             }

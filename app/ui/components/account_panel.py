@@ -110,7 +110,7 @@ class AccountPanel(QtWidgets.QGroupBox):
         button_row2 = QtWidgets.QHBoxLayout()
         self.export_account_btn = QtWidgets.QPushButton("프로필")
         self.export_account_btn.clicked.connect(self._on_open_profile_clicked)
-        self.login_button = QtWidgets.QPushButton("브라우저")
+        self.login_button = QtWidgets.QPushButton("로그인")
         self.login_button.clicked.connect(self._on_open_browser_clicked)
         self.batch_login_btn = QtWidgets.QPushButton("일괄로그인")
         self.batch_login_btn.clicked.connect(self._on_batch_login_clicked)

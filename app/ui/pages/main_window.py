@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import sys
+import time
 from pathlib import Path
 import os
 import platform
@@ -79,20 +81,19 @@ class BatchLoginWorker(QtCore.QThread):
             self.progress_signal.emit(f"📝 [{idx}/{len(self.account_ids)}] '{account_id}' 계정 로그인 시작")
             self.progress_signal.emit(f"{'=' * 70}")
             
-            # 첫 번째 계정이 아니면 CAPTCHA 방지를 위한 대기 시간 적용 (최소화)
+            # 첫 번째 계정이 아니면 CAPTCHA 방지를 위한 대기 시간 적용
             if idx > 1 and self.delay_seconds > 0:
-                # 최소 대기 시간으로 단축
-                actual_delay = max(3, self.delay_seconds // 2) + random.randint(0, 2)  # 최소 3초, 최대 7초
+                actual_delay = max(1, self.delay_seconds) + random.randint(0, 2)
                 self.progress_signal.emit(f"⏳ CAPTCHA 방지: 다음 로그인까지 {actual_delay}초 대기 중...")
                 
-                # 빠른 카운트다운
+                # 중단 요청 확인하면서 대기
                 for remaining in range(actual_delay, 0, -1):
                     if self._should_stop():
                         self.progress_signal.emit("❌ 사용자에 의해 중단되었습니다.")
                         self.finished_signal.emit(success_count, failed_accounts)
                         return
                     
-                    if remaining % 3 == 0 or remaining <= 2:  # 3초마다 또는 마지막 2초
+                    if remaining % 3 == 0 or remaining <= 2:
                         self.progress_signal.emit(f"  ... {remaining}초 남음")
                     time.sleep(1)
                 
@@ -216,6 +217,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._worker: Optional[WorkflowWorker] = None
         self._batch_login_worker: Optional[BatchLoginWorker] = None
         self._validation_thread: Optional[QtCore.QThread] = None
+        
+        # 브라우저 드라이버
+        self._driver = None
         
         # 데이터 저장소
         self._accounts: Dict[str, AccountProfile] = {}
@@ -562,11 +566,11 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "계정 없음", "선택된 계정이 없습니다.")
             return
 
-        self._log(f"'{account_id}' 계정용 브라우저 준비 중...")
+        self._log(f"🔐 '{account_id}' 계정 로그인 상태 확인 중...")
 
         try:
             driver = create_chrome_driver(account.profile_dir)
-            self._log(f"'{account_id}' 계정용 브라우저가 성공적으로 생성되었습니다.")
+            self._log(f"✅ '{account_id}' 계정용 브라우저가 생성되었습니다.")
         except WebDriverException as exc:
             error_msg = f"브라우저 초기화 실패: {exc}"
             QtWidgets.QMessageBox.critical(self, "브라우저 오류", error_msg)
@@ -578,27 +582,38 @@ class MainWindow(QtWidgets.QMainWindow):
             self._log(f"❌ {error_msg}")
             return
 
-        # 드라이버는 워커에서 관리하므로 여기서는 저장하지 않음
-        
-        # 브라우저 초기화 대기 (비차단)
+        # 브라우저 초기화 대기
         self._non_blocking_wait_ms(2000)
-        self._log("브라우저 초기화 완료, 네이버 메인 페이지로 이동 중...")
+        self._log("🌐 네이버 접속 중...")
 
-        # 먼저 간단한 URL로 연결 테스트
+        # 네이버 접속
         try:
-            self._log("네트워크 연결 테스트 중...")
-            driver.get("about:blank")
-            self._non_blocking_wait_ms(1000)
-            self._log("브라우저 네트워크 연결 확인 완료")
+            driver.get("https://www.naver.com/")
+            self._non_blocking_wait_ms(3000)
+            self._log("✅ 네이버 접속 완료")
         except Exception as exc:
-            error_msg = f"브라우저 네트워크 초기화 실패: {exc}"
+            error_msg = f"네이버 접속 실패: {exc}"
             self._log(f"❌ {error_msg}")
             try:
                 driver.quit()
             except Exception:
                 pass
-            # 드라이버 정리
             return
+
+        # 로그인 상태 확인
+        try:
+            is_logged_in = self._check_login_status(driver)
+            if is_logged_in:
+                self._log(f"✅ '{account_id}' 계정이 이미 로그인된 상태입니다!")
+                self._log("💡 브라우저를 닫지 마세요. 이 상태에서 바로 워크플로우를 시작할 수 있습니다.")
+            else:
+                self._log(f"🔐 '{account_id}' 계정 로그인이 필요합니다.")
+                self._log("💡 수동으로 로그인한 후 일괄 로그인을 사용하여 세션을 저장하세요.")
+        except Exception as exc:
+            self._log(f"⚠️ 로그인 상태 확인 중 오류: {exc}")
+        
+        # 브라우저는 사용자가 직접 닫도록 유지
+        self._log("🌐 브라우저가 열렸습니다. 로그인 상태를 확인해보세요.")
 
         # 네이버 접속 시도 (여러 방법으로)
         naver_urls = [
@@ -707,14 +722,14 @@ class MainWindow(QtWidgets.QMainWindow):
             account.login_initialized = True
             self._accounts[account_id] = account
             self._save_accounts()
-            # UI 업데이트를 메인 스레드에서 처리
-            QtCore.QMetaObject.invokeMethod(
-                self, 
-                "_refresh_accounts_ui", 
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(str, account_id)
-            )
-            self._log(f"'{account_id}' 계정을 로그인된 상태로 표시했습니다.")
+            # UI 업데이트를 스레드 안전하게 처리
+            try:
+                # Qt 타이머를 사용하여 메인 스레드에서 UI 업데이트
+                QtCore.QTimer.singleShot(0, lambda: self._refresh_accounts_ui(account_id))
+            except Exception as e:
+                # UI 업데이트 실패 시 로그만 출력하고 계속 진행
+                self._log(f"UI 업데이트 실패 (무시): {e}")
+            self._log(f"✅ '{account_id}' 계정을 로그인된 상태로 저장했습니다.")
             return True
         return False
 
@@ -771,6 +786,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _check_current_logged_in_account(self, driver) -> Optional[str]:
         """현재 로그인된 계정 ID를 확인합니다."""
         try:
+            # 브라우저 연결 상태 확인
+            try:
+                driver.current_url
+            except Exception as e:
+                if "Connection refused" in str(e) or "NewConnectionError" in str(e):
+                    self._log("⚠️ 브라우저 연결이 끊어졌습니다.")
+                    return None
+                raise e
+            
             # 1단계: 먼저 페이지에서 실제 로그인 상태 확인
             try:
                 # 로그인 버튼이 있으면 로그인되지 않은 상태
@@ -1453,6 +1477,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.repeat_panel.reset_progress()
 
         # 다중 계정 워크플로우 워커 시작
+        # 첫 번째 계정으로 브라우저 생성
+        if not self._driver and target_accounts:
+            first_account = target_accounts[0]
+            account = self._accounts[first_account]
+            try:
+                self._driver = create_chrome_driver(account.profile_dir)
+                self._log(f"✅ '{first_account}' 계정용 브라우저를 생성했습니다.")
+            except Exception as e:
+                self._log(f"❌ 브라우저 생성 실패: {e}")
+                QtWidgets.QMessageBox.warning(self, "브라우저 오류", f"브라우저를 생성할 수 없습니다:\n{e}")
+                return
+        
         self._worker = MultiAccountWorkflowWorker(
             params,
             target_accounts,
@@ -1748,6 +1784,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._log(f"   - {account_id}: {reason}")
         self._log("=" * 70)
         
+        # 계정 UI 즉시 업데이트
+        self._refresh_accounts_ui()
+        
         # UI 재활성화
         self.account_panel.enable_controls(True)
         self.manual_panel.enable_controls(True)
@@ -1793,20 +1832,20 @@ class MainWindow(QtWidgets.QMainWindow):
         
         driver = None
         try:
-            # 브라우저 생성
-            log_func(f"'{account_id}' 계정용 브라우저 생성 중...")
+            # 브라우저 생성 (안정적인 방식)
+            log_func(f"🔐 '{account_id}' 계정 로그인 상태 확인 중...")
             driver = create_chrome_driver(account.profile_dir)
-            log_func(f"✅ 브라우저 생성 완료")
+            log_func(f"✅ '{account_id}' 계정용 브라우저가 생성되었습니다.")
             
-            # 네이버 메인 페이지 접속 (빠른 접속)
-            log_func("네이버 접속 중...")
+            # 브라우저 초기화 대기
+            time.sleep(2)
+            log_func("🌐 네이버 접속 중...")
             
+            # 네이버 접속 (안정적인 방식)
             try:
                 driver.get("https://www.naver.com/")
-                WebDriverWait(driver, 10).until(  # 15초 → 10초로 단축
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-                log_func("✅ 접속 OK")
+                time.sleep(3)
+                log_func("✅ 네이버 접속 완료")
             except Exception as exc:
                 log_func(f"❌ 네이버 접속 실패: {exc}")
                 try:
@@ -1824,26 +1863,67 @@ class MainWindow(QtWidgets.QMainWindow):
                     pass
                 return "stopped"
             
-            # 로그인 상태 확인 (빠른 확인)
-            current_logged_in_account = self._check_current_logged_in_account(driver)
-            
-            if current_logged_in_account == account_id:
-                # 이미 로그인되어 있음
-                log_func(f"✅ '{account_id}' 이미 로그인됨 (건너뜀)")
-                self._mark_account_logged_in(account_id)
-                try:
-                    driver.quit()
-                except:
-                    pass
-                return "skipped"
+            # 로그인 상태 확인 (안정적인 방식)
+            log_func("🔍 로그인 상태 확인 중...")
+            try:
+                # 쿠키 기반 로그인 상태 확인 (가장 확실한 방법)
+                cookies = {cookie.get("name") for cookie in driver.get_cookies()}
+                if {"NID_SES", "NID_AUT", "NID_JKL"}.intersection(cookies):
+                    log_func(f"✅ '{account_id}' 계정이 이미 로그인된 상태입니다!")
+                    self._mark_account_logged_in(account_id)
+                    log_func(f"💾 '{account_id}' 계정 세션을 저장했습니다.")
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+                    log_func(f"🌐 브라우저가 닫히면서 정상적으로 로그인이 완료되었습니다.")
+                    return "success"
                 
-            elif current_logged_in_account and current_logged_in_account != account_id:
-                # 다른 계정이 로그인되어 있음 - 로그아웃
-                log_func(f"⚠️ 다른 계정 '{current_logged_in_account}'이 로그인되어 있습니다. 로그아웃을 시도합니다.")
-                if self._logout_current_account(driver):
-                    log_func("✅ 기존 계정 로그아웃 완료")
+                # UI 요소 기반 로그인 상태 확인
+                is_logged_in = self._check_login_status(driver)
+                if is_logged_in:
+                    log_func(f"✅ '{account_id}' 계정이 이미 로그인된 상태입니다!")
+                    self._mark_account_logged_in(account_id)
+                    log_func(f"💾 '{account_id}' 계정 세션을 저장했습니다.")
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+                    log_func(f"🌐 브라우저가 닫히면서 정상적으로 로그인이 완료되었습니다.")
+                    return "success"
                 else:
-                    log_func("⚠️ 로그아웃 실패, 계속 진행합니다.")
+                    log_func(f"🔐 '{account_id}' 계정 로그인이 필요합니다.")
+            except Exception as exc:
+                log_func(f"⚠️ 로그인 상태 확인 중 오류: {exc}")
+                log_func("🔐 로그인을 시도합니다...")
+            
+            # 다른 계정 로그아웃 확인
+            try:
+                current_logged_in_account = self._check_current_logged_in_account(driver)
+                if current_logged_in_account is None:
+                    # 브라우저 연결이 끊어진 경우
+                    log_func("⚠️ 브라우저 연결이 끊어졌습니다. 새 브라우저를 생성합니다.")
+                    try:
+                        driver.quit()
+                    except:
+                        pass
+                    # 새 브라우저 생성
+                    driver = create_chrome_driver(account.profile_dir)
+                    log_func("✅ 새 브라우저 생성 완료")
+                    # 네이버 재접속
+                    driver.get("https://www.naver.com/")
+                    time.sleep(3)
+                    log_func("✅ 네이버 재접속 완료")
+                elif current_logged_in_account and current_logged_in_account != account_id:
+                    # 다른 계정이 로그인되어 있음 - 로그아웃
+                    log_func(f"⚠️ 다른 계정 '{current_logged_in_account}'이 로그인되어 있습니다. 로그아웃을 시도합니다.")
+                    if self._logout_current_account(driver):
+                        log_func("✅ 기존 계정 로그아웃 완료")
+                    else:
+                        log_func("⚠️ 로그아웃 실패, 계속 진행합니다.")
+            except Exception as exc:
+                log_func(f"⚠️ 다른 계정 확인 중 오류: {exc}")
+                log_func("🔐 로그인을 시도합니다...")
             
             # 자동 로그인 수행 (빠른 로그인)
             log_func(f"🔐 '{account_id}' 계정 자동 로그인을 시작합니다...")
@@ -1879,14 +1959,17 @@ class MainWindow(QtWidgets.QMainWindow):
                     pass
                 return "로그인 프로세스 오류"
             
-            # 로그인 완료 대기 (빠른 처리)
-            log_func("⏳ 로그인 완료 대기 중... (최대 15초)")
+            # 로그인 완료 대기 (CAPTCHA 무제한 대기)
+            log_func("⏳ 로그인 완료 대기 중... (CAPTCHA 무제한 대기)")
             log_func("💡 CAPTCHA 나오면 즉시 풀어주세요!")
+            log_func("🛑 정지 버튼을 누르면 언제든 중단할 수 있습니다.")
             login_success = False
             
             captcha_detected = False
-            for attempt in range(10):  # 10회 * 1.5초 = 15초 (빠른 처리)
-                time.sleep(1.5)  # 2초 → 1.5초로 단축
+            attempt = 0
+            while True:  # 무제한 대기
+                time.sleep(3)  # 3초마다 체크
+                attempt += 1
                 
                 # 중단 요청 확인
                 if should_stop_func():
@@ -1923,11 +2006,13 @@ class MainWindow(QtWidgets.QMainWindow):
                             log_func("✅ CAPTCHA 통과! 로그인 완료")
                         break
                     
-                    # 진행 상황 알림 (초고속 모드에서는 최소화)
-                    if attempt % 3 == 0 and attempt > 0:  # 9초마다
-                        elapsed = (attempt + 1) * 3
+                    # 진행 상황 알림 (CAPTCHA 중일 때만)
+                    if attempt % 10 == 0 and attempt > 0:  # 30초마다
+                        elapsed = attempt * 3
                         if captcha_detected:
-                            log_func(f"  ⏰ CAPTCHA ({elapsed}초)")
+                            log_func(f"  ⏰ CAPTCHA 대기 중... ({elapsed}초)")
+                        else:
+                            log_func(f"  ⏰ 로그인 대기 중... ({elapsed}초)")
                         
                 except WebDriverException:
                     log_func("❌ 브라우저 연결이 끊어졌습니다.")
@@ -1937,34 +2022,44 @@ class MainWindow(QtWidgets.QMainWindow):
                     continue
             
             if login_success:
-                log_func(f"✅ '{account_id}' OK")
+                log_func(f"✅ '{account_id}' 로그인 완료!")
                 self._mark_account_logged_in(account_id)
+                log_func(f"💾 '{account_id}' 계정 세션을 저장했습니다.")
+                
+                # 브라우저를 안전하게 닫기
                 try:
                     driver.quit()
-                except:
-                    pass
+                    log_func(f"🌐 브라우저가 닫히면서 정상적으로 로그인이 완료되었습니다.")
+                except Exception as e:
+                    log_func(f"⚠️ 브라우저 종료 중 오류 (무시): {e}")
+                
                 return "success"
             else:
                 # 타임아웃 시에도 쿠키 재확인
                 try:
                     cookies = {cookie.get("name") for cookie in driver.get_cookies()}
                     if {"NID_SES", "NID_AUT", "NID_JKL"}.intersection(cookies):
-                        log_func(f"✅ '{account_id}' OK (최종확인)")
+                        log_func(f"✅ '{account_id}' 로그인 완료! (최종확인)")
                         self._mark_account_logged_in(account_id)
+                        log_func(f"💾 '{account_id}' 계정 세션을 저장했습니다.")
+                        
+                        # 브라우저를 안전하게 닫기
                         try:
                             driver.quit()
-                        except:
-                            pass
+                            log_func(f"🌐 브라우저가 닫히면서 정상적으로 로그인이 완료되었습니다.")
+                        except Exception as e:
+                            log_func(f"⚠️ 브라우저 종료 중 오류 (무시): {e}")
+                        
                         return "success"
                 except:
                     pass
                 
-                log_func(f"❌ '{account_id}' 실패 (15초 초과)")
+                log_func(f"❌ '{account_id}' 실패 (로그인 미완료)")
                 try:
                     driver.quit()
                 except:
                     pass
-                return "로그인 실패 (15초 초과)"
+                return "로그인 실패"
                 
         except Exception as exc:
             error_msg = str(exc)[:50]
@@ -2163,21 +2258,23 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                         naver_profile_dir=str(account.profile_dir),
                     )
 
-                    # 첫 번째 계정에서만 브라우저 생성
-                    if index == 0:
-                        self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
-                        
-                        # 새 브라우저 생성 (계정별 프로필 사용)
+                    # 각 계정별로 새로운 브라우저 생성 (연결 안정성)
+                    self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
+                    
+                    # 기존 브라우저가 있으면 종료
+                    if hasattr(self, 'driver') and self.driver:
                         try:
-                            self.driver = create_chrome_driver(account.profile_dir)
-                            self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
-                        except Exception as exc:
-                            self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
-                            continue
-                    else:
-                        # 이후 계정들은 기존 브라우저 재사용
-                        self.progress_signal.emit(f"🔄 '{account_id}' 계정으로 전환 중...", False)
-                        # 브라우저는 그대로 유지하고 계정 전환만 수행
+                            self.driver.quit()
+                        except:
+                            pass
+                    
+                    # 새 브라우저 생성 (계정별 프로필 사용)
+                    try:
+                        self.driver = create_chrome_driver(account.profile_dir)
+                        self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
+                    except Exception as exc:
+                        self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
+                        continue
 
                     # 계정별 워크플로우 실행
                     worker = WorkflowWorker(
@@ -2224,6 +2321,14 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
         except Exception as exc:
             self.error_signal.emit(f"다중 계정 워크플로우 오류: {exc}")
             return
+        finally:
+            # 워크플로우 완료 후 브라우저 정리
+            if hasattr(self, 'driver') and self.driver:
+                try:
+                    self.driver.quit()
+                    self.driver = None
+                except:
+                    pass
 
         if self.infinite_loop:
             self.progress_signal.emit("🛑 무한 반복 모드가 중단되었습니다.", True)
