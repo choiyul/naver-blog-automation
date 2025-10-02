@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import os
-import sys
 import platform
 from typing import Dict, Optional
 
@@ -17,14 +16,16 @@ from selenium.webdriver.support.ui import WebDriverWait
 from openai import OpenAI  # type: ignore[import]
 
 from app.core.accounts import ensure_profile_dir, load_accounts, save_accounts
-from app.core.automation.naver_publisher import NAVER_HOME_URL, create_chrome_driver
+from app.core.automation.naver_publisher import (
+    NAVER_HOME_URL, create_chrome_driver, BlogPostContent, 
+    publish_blog_post, AccountProtectionException
+)
 from app.core.constants import AUTOMATION_STEPS_PER_POST
 from app.core.models import AccountProfile, WorkflowParams
 from app.core.preferences import UserSettings, load_settings, save_settings
 from app.core.services.content_service import ContentGenerator
 from app.core.theme import DARK_THEME, LIGHT_THEME
 from app.core.workflow import WorkflowWorker
-from app.core.automation.naver_publisher import BlogPostContent, publish_blog_post, create_chrome_driver, AccountProtectionException
 from ..components.account_panel import AccountPanel
 from ..components.header_bar import HeaderBar
 from ..components.ai_control_panel import AiControlPanel
@@ -211,16 +212,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.profiles_root = self.accounts_dir / "profiles"
         self.profiles_root.mkdir(parents=True, exist_ok=True)
 
-        self._driver: Optional[object] = None
+        # 워커 스레드들
         self._worker: Optional[WorkflowWorker] = None
         self._batch_login_worker: Optional[BatchLoginWorker] = None
+        self._validation_thread: Optional[QtCore.QThread] = None
+        
+        # 데이터 저장소
         self._accounts: Dict[str, AccountProfile] = {}
         self._selected_account_id: Optional[str] = None
+        
+        # 상태 플래그들
         self._api_valid = False
         self._is_ai_mode = False  # 기본값을 수동모드로 변경
         self._current_theme = "dark"
-        self._validation_thread: Optional[QtCore.QThread] = None
-        self._pending_login_checks: dict[str, bool] = {}
 
         self._build_ui()
         self._load_settings()
@@ -229,7 +233,6 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # 프로그램 시작 시 강제로 수동 모드로 설정 (설정 로드 후)
         self._set_ai_mode(False)
-        print(f"DEBUG: 초기 모드 설정 후 _is_ai_mode = {self._is_ai_mode}")  # 디버깅용
 
     # --- UI 구성 ---
 
@@ -575,7 +578,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._log(f"❌ {error_msg}")
             return
 
-        self._driver = driver
+        # 드라이버는 워커에서 관리하므로 여기서는 저장하지 않음
         
         # 브라우저 초기화 대기 (비차단)
         self._non_blocking_wait_ms(2000)
@@ -594,7 +597,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 driver.quit()
             except Exception:
                 pass
-            self._driver = None
+            # 드라이버 정리
             return
 
         # 네이버 접속 시도 (여러 방법으로)
@@ -715,36 +718,6 @@ class MainWindow(QtWidgets.QMainWindow):
             return True
         return False
 
-    def _schedule_login_status_check(self, account_id: str, driver, attempts: int = 12) -> None:
-        if account_id in self._pending_login_checks:
-            return
-        self._pending_login_checks[account_id] = True
-
-        def check(remaining: int) -> None:
-            if account_id not in self._pending_login_checks:
-                return
-            if not getattr(driver, "session_id", None):
-                self._pending_login_checks.pop(account_id, None)
-                return
-            try:
-                cookies = {cookie.get("name") for cookie in driver.get_cookies()}
-            except WebDriverException:
-                self._pending_login_checks.pop(account_id, None)
-                return
-
-            if {"NID_SES", "NID_AUT", "NID_JKL"}.intersection(cookies) or self._check_login_status(driver):
-                self._pending_login_checks.pop(account_id, None)
-                if self._mark_account_logged_in(account_id):
-                    self._log(f"'{account_id}' 계정 로그인 상태를 확인했습니다.")
-                return
-
-            if remaining > 0:
-                QtCore.QTimer.singleShot(4000, lambda: check(remaining - 1))
-            else:
-                self._pending_login_checks.pop(account_id, None)
-                self._log("로그인 상태를 확인하지 못했습니다. 창이 열려 있는지 또는 추가 인증이 필요한지 확인해주세요.")
-
-        QtCore.QTimer.singleShot(4000, lambda: check(attempts))
 
     def _check_login_status(self, driver) -> bool:
         """네이버 로그인 상태를 정확하게 확인합니다."""
@@ -1649,17 +1622,13 @@ class MainWindow(QtWidgets.QMainWindow):
         super().resizeEvent(event)
 
     def _non_blocking_wait_ms(self, ms: int) -> None:
-        # UI 이벤트를 처리하면서 대기 (성능 최적화)
-        try:
-            from PyQt5 import QtTest  # type: ignore
-            # processEvents 호출을 최소화
-            if ms > 100:
-                QtWidgets.QApplication.processEvents()
-            QtTest.QTest.qWait(max(0, int(ms)))
-        except Exception:
-            # fallback에서도 processEvents 호출 최소화
-            if ms > 100:
-                QtWidgets.QApplication.processEvents()
+        """UI 이벤트를 처리하면서 대기 (최적화된 버전)."""
+        import time
+        start_time = time.time()
+        while (time.time() - start_time) * 1000 < ms:
+            QtWidgets.QApplication.processEvents()
+            time.sleep(0.01)  # 10ms씩 대기
+
 
     def _batch_login_accounts(self, account_ids: list[str]) -> None:
         """선택된 계정들에 대해 순차적으로 일괄 로그인을 수행합니다. (워커 스레드 사용)"""

@@ -1,6 +1,5 @@
 """3개 섹션으로 구분된 로그 영역."""
 
-import re
 from datetime import datetime
 from typing import Optional
 
@@ -89,9 +88,15 @@ class RepeatPanel(QtWidgets.QWidget):
 
     def _format_log_message(self, message: str) -> str:
         """로그 메시지를 사용자 친화적 형식으로 변환합니다."""
-        # 로그 레벨 제거
-        import re
-        message = re.sub(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} - (INFO|DEBUG|ERROR|WARNING) - ', '', message)
+        # 로그 레벨 제거 (정규식 대신 간단한 문자열 처리)
+        if ' - INFO - ' in message:
+            message = message.split(' - INFO - ', 1)[-1]
+        elif ' - DEBUG - ' in message:
+            message = message.split(' - DEBUG - ', 1)[-1]
+        elif ' - ERROR - ' in message:
+            message = message.split(' - ERROR - ', 1)[-1]
+        elif ' - WARNING - ' in message:
+            message = message.split(' - WARNING - ', 1)[-1]
         
         # 현재 시간 추가
         current_time = datetime.now().strftime("%H:%M:%S")

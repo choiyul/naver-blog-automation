@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from typing import Callable, Dict
-import math
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+
+from ...core.utils import show_notification
 
 
 class HeaderBar(QtWidgets.QWidget):
@@ -22,8 +23,9 @@ class HeaderBar(QtWidgets.QWidget):
         self._toggle_theme = toggle_theme
         self._toggle_mode = toggle_mode
         
-        # 아이콘 캐시 (성능 최적화)
+        # 아이콘 캐시 (성능 최적화) - 최대 10개로 제한
         self._icon_cache: Dict[str, QtGui.QIcon] = {}
+        self._max_cache_size = 10
         
         self._build_ui()  # UI 구성 호출
 
@@ -85,68 +87,12 @@ class HeaderBar(QtWidgets.QWidget):
     def _handle_mode_clicked(self, checked: bool) -> None:
         self._toggle_mode(checked)
         mode_name = "AI 모드" if checked else "수동 모드"
-        self._show_notification("✨", mode_name, "모드가 변경되었습니다.")
+        show_notification(self, "✨", mode_name, "모드가 변경되었습니다.")
 
     def _handle_theme_clicked(self) -> None:
         self._toggle_theme()
-        self._show_notification("🌙", "테마 변경", "테마가 변경되었습니다.")
+        show_notification(self, "🌙", "테마 변경", "테마가 변경되었습니다.")
 
-    def _show_notification(self, icon: str, title: str, message: str) -> None:
-        # 알림을 비동기적으로 표시 (성능 최적화)
-        QtCore.QTimer.singleShot(0, lambda: self._show_notification_delayed(icon, title, message))
-    
-    def _show_notification_delayed(self, icon: str, title: str, message: str) -> None:
-        """지연된 알림 표시 (UI 블로킹 방지)"""
-        dialog = QtWidgets.QDialog(self.window())
-        dialog.setWindowFlags(
-            QtCore.Qt.Dialog
-            | QtCore.Qt.FramelessWindowHint
-            | QtCore.Qt.WindowSystemMenuHint
-        )
-        dialog.setModal(True)
-        dialog.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-
-        outer_layout = QtWidgets.QVBoxLayout(dialog)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-
-        container = QtWidgets.QFrame()
-        container.setObjectName("notificationContainer")
-        outer_layout.addWidget(container)
-
-        layout = QtWidgets.QVBoxLayout(container)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
-
-        title_label = QtWidgets.QLabel(title)
-        title_label.setObjectName("notificationTitle")
-
-        content_layout = QtWidgets.QHBoxLayout()
-        content_layout.setSpacing(16)
-
-        icon_label = QtWidgets.QLabel(icon)
-        icon_label.setObjectName("notificationIcon")
-
-        message_label = QtWidgets.QLabel(message)
-        message_label.setObjectName("notificationMessage")
-        message_label.setAlignment(QtCore.Qt.AlignCenter)
-
-        content_layout.addWidget(icon_label, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        content_layout.addWidget(message_label, 1)
-
-        button = QtWidgets.QPushButton("확인")
-        button.setObjectName("notificationConfirmButton")
-        button.clicked.connect(dialog.accept)
-
-        layout.addWidget(title_label, 0, QtCore.Qt.AlignLeft)
-        layout.addLayout(content_layout)
-        layout.addWidget(button, 0, QtCore.Qt.AlignRight)
-
-        dialog.adjustSize()
-        parent_rect = self.window().geometry()
-        center_x = parent_rect.center().x() - dialog.width() // 2
-        center_y = parent_rect.center().y() - dialog.height() // 2
-        dialog.move(center_x, center_y)
-        dialog.exec_()
 
     def set_mode(self, is_ai: bool) -> None:
         self.mode_button.blockSignals(True)
@@ -164,6 +110,12 @@ class HeaderBar(QtWidgets.QWidget):
         # 캐시된 아이콘 사용 (성능 최적화)
         icon_key = f"{'moon' if is_dark else 'sun'}_{color}"
         if icon_key not in self._icon_cache:
+            # 캐시 크기 제한
+            if len(self._icon_cache) >= self._max_cache_size:
+                # 가장 오래된 항목 제거 (FIFO)
+                oldest_key = next(iter(self._icon_cache))
+                del self._icon_cache[oldest_key]
+            
             self._icon_cache[icon_key] = (
                 self._create_moon_icon(color) if is_dark else self._create_sun_icon(color)
             )
@@ -190,10 +142,14 @@ class HeaderBar(QtWidgets.QWidget):
         painter.drawEllipse(center, size * 0.3, size * 0.3)
 
         painter.setPen(QtGui.QPen(sun_color, 2, QtCore.Qt.SolidLine, QtCore.Qt.RoundCap))
-        for angle in range(0, 360, 45):
-            rad = math.radians(angle)
-            start = QtCore.QPointF(center.x() + math.cos(rad) * size * 0.28, center.y() + math.sin(rad) * size * 0.28)
-            end = QtCore.QPointF(center.x() + math.cos(rad) * size * 0.42, center.y() + math.sin(rad) * size * 0.42)
+        # 미리 계산된 8방향 좌표 (45도 간격)
+        rays = [
+            (0.28, 0.0), (0.198, 0.198), (0.0, 0.28), (-0.198, 0.198),
+            (-0.28, 0.0), (-0.198, -0.198), (0.0, -0.28), (0.198, -0.198)
+        ]
+        for ray_x, ray_y in rays:
+            start = QtCore.QPointF(center.x() + ray_x * size, center.y() + ray_y * size)
+            end = QtCore.QPointF(center.x() + ray_x * size * 1.5, center.y() + ray_y * size * 1.5)
             painter.drawLine(start, end)
 
         painter.end()

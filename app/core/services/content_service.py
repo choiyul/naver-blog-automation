@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -124,7 +123,9 @@ class ContentGenerator:
             if tag not in tags:
                 tags.append(tag)
         if len(tags) < 5:
-            fallback = [_safe_tag(word) for word in re.findall(r"[가-힣A-Za-z0-9]{2,}", keyword)]
+            # 정규식 대신 간단한 문자열 분할 사용
+            words = [word for word in keyword.split() if len(word) >= 2 and word.isalnum()]
+            fallback = [_safe_tag(word) for word in words]
             for tag in fallback:
                 if tag not in tags:
                     tags.append(tag)
@@ -137,7 +138,8 @@ class ContentGenerator:
 
 def save_backup(keyword: str, index: int, post: GeneratedPost, base_dir: Optional[Path] = None) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe = re.sub(r"[^0-9A-Za-z가-힣]+", "_", keyword).strip("_") or "keyword"
+    # 정규식 대신 간단한 문자열 처리
+    safe = "".join(c if c.isalnum() or '가' <= c <= '힣' else "_" for c in keyword).strip("_") or "keyword"
     filename = f"blog_{safe}_{index}_{timestamp}.txt"
     folder = base_dir or Path.cwd()
     folder.mkdir(parents=True, exist_ok=True)
@@ -168,7 +170,7 @@ def save_backup(keyword: str, index: int, post: GeneratedPost, base_dir: Optiona
 def build_manual_tags(keyword: str, manual_tags: Optional[str], body_text: str) -> list[str]:
     tags: list[str] = []
     raw = manual_tags or ""
-    for token in re.split(r"[\s,]+", raw.strip()):
+    for token in raw.replace(',', ' ').split():
         if not token:
             continue
         if not token.startswith("#"):
@@ -176,7 +178,9 @@ def build_manual_tags(keyword: str, manual_tags: Optional[str], body_text: str) 
         if token not in tags:
             tags.append(token)
     if len(tags) < 5:
-        candidates = re.findall(r"[가-힣A-Za-z0-9]{2,}", f"{keyword} {body_text}")
+        # 정규식 대신 간단한 문자열 분할 사용
+        text = f"{keyword} {body_text}"
+        candidates = [word for word in text.split() if len(word) >= 2 and word.isalnum()]
         for word in candidates:
             tag = f"#{word}"
             if tag not in tags:
@@ -190,10 +194,13 @@ def build_manual_tags(keyword: str, manual_tags: Optional[str], body_text: str) 
 
 def _normalize_text(text: str) -> str:
     cleaned = text.strip()
-    cleaned = re.sub(r"\r\n", "\n", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    cleaned = re.sub(r"\s+\n", "\n", cleaned)
-    return cleaned
+    cleaned = cleaned.replace("\r\n", "\n")
+    # 연속된 줄바꿈을 2개로 제한
+    while "\n\n\n" in cleaned:
+        cleaned = cleaned.replace("\n\n\n", "\n\n")
+    # 줄 끝의 공백 제거
+    lines = [line.rstrip() for line in cleaned.split("\n")]
+    return "\n".join(lines)
 
 
 def _safe_tag(token: str) -> str:

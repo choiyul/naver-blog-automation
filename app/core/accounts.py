@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -150,7 +149,8 @@ def save_accounts(db_path: Path, accounts: Iterable[AccountProfile]) -> None:
 
 
 def sanitize_account_id(account_id: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", account_id)
+    # 정규식 대신 간단한 문자열 처리
+    return "".join(c if c.isalnum() or c in "_-" else "_" for c in account_id)
 
 
 def ensure_profile_dir(profiles_root: Path, account_id: str, reset: bool = False) -> Path:
