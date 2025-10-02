@@ -25,6 +25,14 @@ a = Analysis(
         'requests',
         'dotenv',
         'sqlite3',
+        # SSL 관련 모듈 추가
+        'ssl',
+        '_ssl',
+        '_hashlib',
+        'certifi',
+        'urllib3',
+        'http.client',
+        'http.cookiejar',
     ],
     hookspath=[],
     hooksconfig={},
@@ -53,8 +61,8 @@ exe = EXE(
     name='NaverBlog',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,  # 디버그 정보 제거로 크기 최적화
-    upx=True,    # 압축으로 크기 최적화
+    strip=False,  # SSL DLL 문제 방지를 위해 strip 비활성화
+    upx=False,    # SSL DLL 문제 방지를 위해 UPX 압축 비활성화
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,  # GUI 모드 (콘솔 창 숨김)

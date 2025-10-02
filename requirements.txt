@@ -7,3 +7,5 @@ python-dotenv==1.0.0
 pytz==2023.3
 pywin32==306  # Windows 전용
 Pillow==10.0.1  # 이미지 처리
+certifi==2023.7.22  # SSL 인증서
+urllib3==2.0.7  # HTTP 클라이언트
