@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows용 PyInstaller 빌드 스펙
+# Windows용 PyInstaller 빌드 스펙 (최적화)
 
 block_cipher = None
 
@@ -12,30 +12,29 @@ a = Analysis(
     ],
     hiddenimports=[
         'PyQt5.QtCore',
-        'PyQt5.QtGui',
+        'PyQt5.QtGui', 
         'PyQt5.QtWidgets',
-        'PyQt5.QtTest',
-        'selenium',
-        'selenium.webdriver',
         'selenium.webdriver.chrome',
         'selenium.webdriver.chrome.options',
         'selenium.webdriver.chrome.service',
         'selenium.webdriver.common.by',
-        'selenium.webdriver.common.keys',
         'selenium.webdriver.support.ui',
         'selenium.webdriver.support.expected_conditions',
-        'selenium.webdriver.support.wait',
         'selenium.common.exceptions',
         'openai',
         'requests',
         'dotenv',
-        'pytz',
         'sqlite3',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'matplotlib', 'numpy', 'pandas', 'scipy',  # 불필요한 과학 계산 라이브러리
+        'tkinter', 'turtle',  # 불필요한 GUI 라이브러리
+        'test', 'tests', 'testing',  # 테스트 관련
+        'unittest', 'doctest',  # 테스트 프레임워크
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -54,8 +53,8 @@ exe = EXE(
     name='NaverBlogAutomation',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
+    strip=True,  # 디버그 정보 제거로 크기 최적화
+    upx=True,    # 압축으로 크기 최적화
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,  # GUI 모드 (콘솔 창 숨김)

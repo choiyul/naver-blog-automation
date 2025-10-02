@@ -71,12 +71,8 @@ class BlogPostContent:
     tags: list[str]
 
 
-def _is_windows() -> bool:
-    return platform.system() == "Windows"
-
-
 def _cmd_key():
-    return Keys.CONTROL if _is_windows() else Keys.COMMAND
+    return Keys.CONTROL  # Windows 전용
 
 
 def _cleanup_chrome_processes() -> None:
@@ -187,11 +183,8 @@ def create_chrome_driver(user_data_dir: Path, retry_count: int = 3) -> webdriver
             chrome_options.add_argument("--ignore-certificate-errors")
             chrome_options.add_argument("--ignore-ssl-errors")
     
-            # OS에 맞춘 실제 User-Agent (최신 버전)
-            if _is_windows():
-                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            else:
-                user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            # Windows 전용 User-Agent
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             
             chrome_options.add_argument(f"--user-agent={user_agent}")
             
@@ -782,26 +775,22 @@ def _insert_image(
                 
         except Exception as e:
             LOGGER.warning(f"JavaScript 클립보드 복사 실패: {e}")
-            # 대안: OS별 네이티브 클립보드
+            # Windows 전용 네이티브 클립보드
             try:
-                if _is_windows():
-                    import win32clipboard  # type: ignore
-                    import win32con  # type: ignore
-                    from PIL import Image  # type: ignore
-                    img = Image.open(image_file_path).convert('RGB')
-                    import io
-                    output = io.BytesIO()
-                    img.save(output, format='BMP')
-                    data = output.getvalue()[14:]
-                    output.close()
-                    win32clipboard.OpenClipboard()
-                    win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardData(win32con.CF_DIB, data)
-                    win32clipboard.CloseClipboard()
-                    LOGGER.info("시스템 클립보드 복사 성공 (Windows)")
-                else:
-                    subprocess.run(['osascript', '-e', f'set the clipboard to (read file POSIX file "{image_file_path}" as JPEG picture)'], check=True)
-                    LOGGER.info("시스템 클립보드 복사 성공 (macOS)")
+                import win32clipboard  # type: ignore
+                import win32con  # type: ignore
+                from PIL import Image  # type: ignore
+                img = Image.open(image_file_path).convert('RGB')
+                import io
+                output = io.BytesIO()
+                img.save(output, format='BMP')
+                data = output.getvalue()[14:]
+                output.close()
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32con.CF_DIB, data)
+                win32clipboard.CloseClipboard()
+                LOGGER.info("시스템 클립보드 복사 성공 (Windows)")
                 _report(progress_callback, "시스템 클립보드 복사 완료", True)
             except Exception as e2:
                 LOGGER.error(f"모든 클립보드 복사 방법 실패: {e2}")

@@ -1,6 +1,9 @@
+# Windows 전용 네이버 블로그 자동화 도구 의존성
 PyQt5==5.15.10
 selenium==4.15.2
 openai==1.3.0
 requests==2.31.0
 python-dotenv==1.0.0
 pytz==2023.3
+pywin32==306  # Windows 전용
+Pillow==10.0.1  # 이미지 처리

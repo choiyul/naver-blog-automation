@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import os
-import platform
 from typing import Dict, Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -192,14 +191,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._accounts_save_timer.setSingleShot(True)
         self._accounts_save_timer.timeout.connect(self._do_save_accounts)
 
-        # 애플리케이션 리소스 경로(고정)와 사용자 데이터 경로(가변)를 분리
+        # Windows 전용 데이터 경로 설정
         self.app_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
-        if platform.system() == "Windows":
-            data_home = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-        elif platform.system() == "Darwin":
-            data_home = Path.home() / "Library" / "Application Support"
-        else:
-            data_home = Path.home() / ".local" / "share"
+        data_home = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
         self.data_root = data_home / "NBlogStudio"
         # 작업 파일 및 임시/백업 저장 기준 경로
         self.base_dir = self.data_root
