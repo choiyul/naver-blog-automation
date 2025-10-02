@@ -50,7 +50,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='NaverBlogAutomation',
+    name='NaverBlog',
     debug=False,
     bootloader_ignore_signals=False,
     strip=True,  # 디버그 정보 제거로 크기 최적화

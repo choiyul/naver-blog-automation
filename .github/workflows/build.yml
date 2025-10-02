@@ -3,8 +3,11 @@ name: Build Windows Application
 on:
   push:
     branches: [main]
+    tags:
+      - "v*"
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -14,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
@@ -24,36 +27,82 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Windows EXE
+      - name: Build EXE
         run: |
-          python -m PyInstaller build-windows.spec
+          pyinstaller --clean --noconfirm build-windows.spec
 
-      - name: Upload Windows Artifact
+      - name: Create Release Package
+        run: |
+          mkdir release
+          copy dist\NaverBlog.exe release\
+          copy 사용설명서.txt release\
+          copy README.md release\
+
+      - name: Create ZIP Archive
+        run: |
+          powershell Compress-Archive -Path release\* -DestinationPath NaverBlog-Windows.zip
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NaverBlogAutomation-Windows
-          path: dist/
+          name: NaverBlog-Windows
+          path: NaverBlog-Windows.zip
           retention-days: 30
 
-  create-release:
-    needs: [build-windows]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - name: Download Windows Artifact
-        uses: actions/download-artifact@v4
+      - name: Create Release (if tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
-          name: NaverBlogAutomation-Windows
-          path: ./windows
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ github.run_number }}
-          name: Release v${{ github.run_number }}
+          files: NaverBlog-Windows.zip
           body: |
-            ## 🚀 Windows 자동 빌드 완료
+            ## 🚀 네이버 블로그 자동 포스팅 프로그램
+
+            ### 📦 다운로드 파일
+            - **NaverBlog-Windows.zip** - Windows용 실행 파일 + 사용 설명서
+
+            ### 📋 포함 내용
+            - ✅ NaverBlog.exe - 메인 프로그램
+            - ✅ 사용설명서.txt - 상세한 사용 가이드
+            - ✅ README.md - 프로젝트 정보
+
+            ### 🚀 빠른 시작
+            1. NaverBlog-Windows.zip 다운로드
+            2. 압축 해제
+            3. 사용설명서.txt 파일을 먼저 읽어보세요
+            4. NaverBlog.exe 실행
+
+            ### ⚠️ 주의사항
+            - Windows Defender 경고가 나오면 "추가 정보" → "실행" 클릭
+            - 네이버 이용약관을 준수하여 사용하세요
+            - 과도한 자동화는 계정 제재의 원인이 될 수 있습니다
+
+            ### 🔧 시스템 요구사항
+            - Windows 7/10/11 (64비트)
+            - 최소 4GB RAM
+            - 안정적인 인터넷 연결
+
+            ---
+            **Happy Blogging! 🎉**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Auto Release (if main branch push)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-v${{ github.run_number }}
+          name: 자동 빌드 v${{ github.run_number }}
+          files: NaverBlog-Windows.zip
+          body: |
+            ## 🤖 자동 빌드 완료
+
+            ### 📦 다운로드
+            - **NaverBlog-Windows.zip** - Windows용 실행 파일 + 사용 설명서
+
+            ### 📋 포함 내용
+            - NaverBlog.exe
+            - 사용설명서.txt
+            - README.md
 
             ### 최적화 사항
             - 불필요한 파일 및 코드 제거
@@ -61,15 +110,12 @@ jobs:
             - 메모리 사용량 최적화
             - 빌드 크기 최적화
 
-            ### 다운로드
-            - **Windows**: NaverBlogAutomation.exe
-
             ### 사용법
-            1. NaverBlogAutomation.exe 실행
-            2. 계정 추가 후 브라우저 열기
-            3. 정리 버튼(🔧)으로 브라우저 초기화
-          files: |
-            ./windows/NaverBlogAutomation.exe
+            1. zip 파일 다운로드 및 압축 해제
+            2. 사용설명서.txt 읽기
+            3. NaverBlog.exe 실행
+            4. 계정 추가 후 브라우저 열기
+            5. 정리 버튼(🔧)으로 브라우저 초기화 가능
           draft: false
           prerelease: false
         env:
