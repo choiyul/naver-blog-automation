@@ -345,9 +345,7 @@ def publish_blog_post(
         LOGGER.info("작업 중단 요청 - 발행 준비 전")
         raise RuntimeError("사용자에 의해 작업이 중단되었습니다.")
 
-    if PUBLISH_DELAY_SECONDS > 0:
-        LOGGER.info("발행 준비 중...")
-        time.sleep(PUBLISH_DELAY_SECONDS)
+    # 발행 준비 대기 제거 (불필요한 시간 낭비)
     _report(progress_callback, "발행 준비", True)
 
     # 중단 요청 확인
@@ -779,26 +777,32 @@ def _insert_image(
                 
         except Exception as e:
             LOGGER.warning(f"JavaScript 클립보드 복사 실패: {e}")
-            # Windows 전용 네이티브 클립보드
-            try:
-                import win32clipboard  # type: ignore
-                import win32con  # type: ignore
-                from PIL import Image  # type: ignore
-                img = Image.open(image_file_path).convert('RGB')
-                import io
-                output = io.BytesIO()
-                img.save(output, format='BMP')
-                data = output.getvalue()[14:]
-                output.close()
-                win32clipboard.OpenClipboard()
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardData(win32con.CF_DIB, data)
-                win32clipboard.CloseClipboard()
-                LOGGER.info("시스템 클립보드 복사 성공 (Windows)")
-                _report(progress_callback, "시스템 클립보드 복사 완료", True)
-            except Exception as e2:
-                LOGGER.error(f"모든 클립보드 복사 방법 실패: {e2}")
-                _report(progress_callback, "클립보드 복사 실패", False)
+            # Windows 전용 네이티브 클립보드 (Windows에서만 시도)
+            if _is_windows():
+                try:
+                    import win32clipboard  # type: ignore
+                    import win32con  # type: ignore
+                    from PIL import Image  # type: ignore
+                    img = Image.open(image_file_path).convert('RGB')
+                    import io
+                    output = io.BytesIO()
+                    img.save(output, format='BMP')
+                    data = output.getvalue()[14:]
+                    output.close()
+                    win32clipboard.OpenClipboard()
+                    win32clipboard.EmptyClipboard()
+                    win32clipboard.SetClipboardData(win32con.CF_DIB, data)
+                    win32clipboard.CloseClipboard()
+                    LOGGER.info("시스템 클립보드 복사 성공 (Windows)")
+                    _report(progress_callback, "시스템 클립보드 복사 완료", True)
+                except Exception as e2:
+                    LOGGER.error(f"Windows 클립보드 복사 실패: {e2}")
+                    _report(progress_callback, "클립보드 복사 실패 - 이미지는 스킵됩니다", False)
+                    return
+            else:
+                # macOS/Linux는 JavaScript 방식만 지원
+                LOGGER.warning(f"macOS/Linux에서는 JavaScript 클립보드만 지원됩니다.")
+                _report(progress_callback, "클립보드 복사 실패 - 이미지는 스킵됩니다", False)
                 return
 
         # 3. 본문 영역에 포커스하고 이미지 붙여넣기
@@ -892,29 +896,30 @@ def _publish_post(
         
         _report(progress_callback, "발행 버튼 찾기 완료 (대안 방법)", True)
     
-    # 발행 버튼 클릭 (2초 대기 후)
-    _countdown_sleep(2, "발행 버튼 클릭 준비", progress_callback, stop_callback)
+    # 발행 버튼 클릭 전 짧은 대기 (DOM 안정화)
+    time.sleep(0.5)
     
+    # 성공한 방식(JS 클릭)을 우선적으로 사용
     try:
         # 화면에 보이도록 스크롤
         driver.execute_script("arguments[0].scrollIntoView(true);", publish_button)
-        time.sleep(0.5)
+        time.sleep(0.3)
         
-        # 클릭 시도
-        publish_button.click()
-        LOGGER.info("발행 버튼 클릭 성공")
+        # JavaScript 클릭 시도 (가장 안정적)
+        driver.execute_script("arguments[0].click();", publish_button)
+        LOGGER.info("발행 버튼 클릭 성공 (JS)")
         _report(progress_callback, "발행 버튼 클릭 완료", True)
         
-    except ElementClickInterceptedException:
-        # JavaScript로 클릭 시도
-        _report(progress_callback, "JavaScript로 발행 버튼 클릭 시도", False)
-        driver.execute_script("arguments[0].click();", publish_button)
-        _report(progress_callback, "발행 버튼 클릭 완료 (JS)", True)
-        
     except Exception as e:
-        _report(progress_callback, "발행 버튼 클릭 실패", False)
-        LOGGER.error("발행 버튼 클릭 실패: %s", e)
-        raise
+        # 실패 시 일반 클릭 시도
+        try:
+            publish_button.click()
+            LOGGER.info("발행 버튼 클릭 성공 (일반)")
+            _report(progress_callback, "발행 버튼 클릭 완료", True)
+        except Exception as e2:
+            _report(progress_callback, "발행 버튼 클릭 실패", False)
+            LOGGER.error("발행 버튼 클릭 실패: %s", e2)
+            raise
 
 
 def _handle_publish_popup(
