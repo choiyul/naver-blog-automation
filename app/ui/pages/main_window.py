@@ -1435,7 +1435,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 항상 무한 반복 모드
         use_infinite_loop = True
-        self._log(f"🔄 무한 반복 모드: 마지막 계정 후 다시 첫 번째 계정부터 시작합니다.")
+        interval_msg = f"{self.manual_panel._current_interval}분" if self.manual_panel.repeat_toggle_btn.isChecked() and self.manual_panel._current_interval > 0 else "즉시"
+        self._log(f"🔄 무한 반복 모드: 모든 계정 완료 후 {interval_msg} 다시 시작합니다.")
         self._log(f"🔗 계정 순서: {' → '.join(target_accounts)}")
 
         params = self._collect_params()
@@ -1446,6 +1447,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.repeat_panel.reset_progress()
 
         # 다중 계정 워크플로우 워커 시작
+        # 반복 간격 가져오기 (분 단위)
+        interval_minutes = self.manual_panel._current_interval if self.manual_panel.repeat_toggle_btn.isChecked() else 0
+        
         self._worker = MultiAccountWorkflowWorker(
             params,
             target_accounts,
@@ -1454,6 +1458,7 @@ class MainWindow(QtWidgets.QMainWindow):
             base_dir=self.base_dir,
             automation_steps_per_post=AUTOMATION_STEPS_PER_POST,
             infinite_loop=use_infinite_loop,
+            interval_minutes=interval_minutes,
         )
         self._worker.finished_signal.connect(self._on_workflow_finished)
         self._worker.error_signal.connect(self._on_workflow_error)
@@ -2099,6 +2104,7 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
         base_dir,
         automation_steps_per_post: int,
         infinite_loop: bool = False,
+        interval_minutes: int = 0,
         parent: Optional[QtCore.QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -2109,6 +2115,7 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
         self.base_dir = base_dir
         self.auto_steps_per_post = automation_steps_per_post
         self.infinite_loop = infinite_loop
+        self.interval_minutes = interval_minutes
         self._stop_requested = False
         self.total_accounts = len(account_ids)
 
@@ -2213,10 +2220,31 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                 if self._should_stop():
                     break
                 
-                # 다음 순환 전 대기 최적화
+                # 다음 순환 전 대기 (반복 간격 적용)
                 if self.infinite_loop:
-                    self.progress_signal.emit("⏳ 다음 순환 준비 중...", False)
-                    time.sleep(3)  # 5초 -> 3초 단축
+                    if self.interval_minutes > 0:
+                        # 사용자가 설정한 간격만큼 대기 (분 → 초 변환)
+                        wait_seconds = self.interval_minutes * 60
+                        self.progress_signal.emit(f"⏳ 다음 순환까지 {self.interval_minutes}분 대기 중...", False)
+                        
+                        # 중단 가능한 대기 (1분마다 체크)
+                        for i in range(wait_seconds):
+                            if self._should_stop():
+                                self.progress_signal.emit("❌ 사용자에 의해 중단되었습니다.", True)
+                                return
+                            
+                            # 남은 시간 표시 (1분마다)
+                            if i % 60 == 0 and i > 0:
+                                remaining_minutes = (wait_seconds - i) // 60
+                                self.progress_signal.emit(f"  ⏰ 남은 시간: {remaining_minutes}분...", False)
+                            
+                            time.sleep(1)
+                        
+                        self.progress_signal.emit(f"✅ {self.interval_minutes}분 대기 완료! 다음 순환을 시작합니다.", True)
+                    else:
+                        # 간격이 0이면 짧은 대기만
+                        self.progress_signal.emit("⏳ 다음 순환 준비 중...", False)
+                        time.sleep(3)
 
         except Exception as exc:
             self.error_signal.emit(f"다중 계정 워크플로우 오류: {exc}")
