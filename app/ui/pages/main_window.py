@@ -2171,23 +2171,40 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                     )
 
                     # 각 계정마다 브라우저 종료 후 새로 시작 (계정별 자동 로그인)
-                    # 이전 브라우저 종료 (첫 번째 계정 제외)
-                    if index > 1 and self.driver:
-                        try:
-                            self.progress_signal.emit(f"🔒 이전 브라우저 종료 중...", False)
-                            self.driver.quit()  # type: ignore[attr-defined]
-                            time.sleep(1)
-                            self.progress_signal.emit(f"✅ 이전 브라우저 종료 완료", True)
-                        except Exception as e:
-                            logger.warning(f"브라우저 종료 실패 (무시): {e}")
+                    # 이전 브라우저 종료 (첫 사이클의 첫 계정만 제외)
+                    if not (cycle_count == 1 and index == 1):
+                        if self.driver:
+                            try:
+                                self.progress_signal.emit(f"🔒 이전 브라우저 종료 중...", False)
+                                self.driver.quit()  # type: ignore[attr-defined]
+                                self.driver = None
+                                time.sleep(2)  # 브라우저 완전 종료 대기
+                                self.progress_signal.emit(f"✅ 이전 브라우저 종료 완료", True)
+                            except Exception as e:
+                                logger.warning(f"브라우저 종료 실패 (무시): {e}")
+                                self.driver = None
+                    
+                    # 프로필 잠금 파일 제거 (안전한 브라우저 시작)
+                    try:
+                        from pathlib import Path
+                        profile_path = Path(account.profile_dir)
+                        for lock_file in ["SingletonLock", "SingletonSocket", "SingletonCookie"]:
+                            lock_path = profile_path / lock_file
+                            if lock_path.exists():
+                                lock_path.unlink(missing_ok=True)
+                                logger.info(f"프로필 잠금 파일 제거: {lock_file}")
+                    except Exception as e:
+                        logger.warning(f"프로필 잠금 파일 제거 실패 (무시): {e}")
                     
                     # 새 브라우저 생성 (계정별 프로필 사용)
                     self.progress_signal.emit(f"🔐 '{account_id}' 계정 브라우저 시작 중...", False)
                     try:
                         self.driver = create_chrome_driver(account.profile_dir)
                         self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료 (자동 로그인)", True)
+                        logger.info(f"'{account_id}' 브라우저 생성 완료 - 프로필: {account.profile_dir}")
                     except Exception as exc:
                         self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
+                        logger.error(f"'{account_id}' 브라우저 생성 실패: {exc}")
                         continue
 
                     # 계정별 워크플로우 실행

@@ -781,16 +781,43 @@ def _insert_image(
                 
         except Exception as e:
             LOGGER.warning(f"JavaScript 클립보드 복사 실패: {e}")
-            # 대안: 시스템 클립보드 사용 (macOS)
-            try:
-                import subprocess
-                subprocess.run(['osascript', '-e', f'set the clipboard to (read file POSIX file "{image_file_path}" as JPEG picture)'], check=True)
-                LOGGER.info("시스템 클립보드 복사 성공 (macOS)")
-                _report(progress_callback, "시스템 클립보드 복사 완료", True)
-            except Exception as e2:
-                LOGGER.error(f"모든 클립보드 복사 방법 실패: {e2}")
-                _report(progress_callback, "클립보드 복사 실패", False)
-                return
+            # 대안: 운영체제별 시스템 클립보드 사용
+            if _is_windows():
+                # Windows: win32clipboard 사용
+                try:
+                    import win32clipboard  # type: ignore
+                    import win32con  # type: ignore
+                    from PIL import Image  # type: ignore
+                    import io
+                    
+                    img = Image.open(image_file_path).convert('RGB')
+                    output = io.BytesIO()
+                    img.save(output, format='BMP')
+                    data = output.getvalue()[14:]  # BMP 헤더 제거
+                    output.close()
+                    
+                    win32clipboard.OpenClipboard()
+                    win32clipboard.EmptyClipboard()
+                    win32clipboard.SetClipboardData(win32con.CF_DIB, data)
+                    win32clipboard.CloseClipboard()
+                    
+                    LOGGER.info("시스템 클립보드 복사 성공 (Windows)")
+                    _report(progress_callback, "시스템 클립보드 복사 완료 (Windows)", True)
+                except Exception as e2:
+                    LOGGER.error(f"Windows 클립보드 복사 실패: {e2}")
+                    _report(progress_callback, "클립보드 복사 실패", False)
+                    return
+            else:
+                # macOS: osascript 사용
+                try:
+                    import subprocess
+                    subprocess.run(['osascript', '-e', f'set the clipboard to (read file POSIX file "{image_file_path}" as JPEG picture)'], check=True)
+                    LOGGER.info("시스템 클립보드 복사 성공 (macOS)")
+                    _report(progress_callback, "시스템 클립보드 복사 완료 (macOS)", True)
+                except Exception as e2:
+                    LOGGER.error(f"macOS 클립보드 복사 실패: {e2}")
+                    _report(progress_callback, "클립보드 복사 실패", False)
+                    return
 
         # 3. 본문 영역에 포커스하고 이미지 붙여넣기 (클립보드 방식 성공 시에만 실행)
         try:
