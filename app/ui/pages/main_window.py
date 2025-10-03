@@ -2170,21 +2170,25 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                         naver_profile_dir=str(account.profile_dir),
                     )
 
-                    # 첫 번째 계정에서만 브라우저 생성
-                    if index == 1 and cycle_count == 1:
-                        self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
-                        
-                        # 새 브라우저 생성 (계정별 프로필 사용)
+                    # 각 계정마다 브라우저 종료 후 새로 시작 (계정별 자동 로그인)
+                    # 이전 브라우저 종료 (첫 번째 계정 제외)
+                    if index > 1 and self.driver:
                         try:
-                            self.driver = create_chrome_driver(account.profile_dir)
-                            self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료", True)
-                        except Exception as exc:
-                            self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
-                            continue
-                    else:
-                        # 이후 계정들은 기존 브라우저 재사용
-                        self.progress_signal.emit(f"🔄 '{account_id}' 계정으로 전환 중...", False)
-                        # 브라우저는 그대로 유지하고 계정 전환만 수행
+                            self.progress_signal.emit(f"🔒 이전 브라우저 종료 중...", False)
+                            self.driver.quit()  # type: ignore[attr-defined]
+                            time.sleep(1)
+                            self.progress_signal.emit(f"✅ 이전 브라우저 종료 완료", True)
+                        except Exception as e:
+                            logger.warning(f"브라우저 종료 실패 (무시): {e}")
+                    
+                    # 새 브라우저 생성 (계정별 프로필 사용)
+                    self.progress_signal.emit(f"🔐 '{account_id}' 계정 브라우저 시작 중...", False)
+                    try:
+                        self.driver = create_chrome_driver(account.profile_dir)
+                        self.progress_signal.emit(f"✅ '{account_id}' 계정 브라우저 생성 완료 (자동 로그인)", True)
+                    except Exception as exc:
+                        self.progress_signal.emit(f"❌ '{account_id}' 브라우저 생성 실패: {exc}", True)
+                        continue
 
                     # 계정별 워크플로우 실행
                     worker = WorkflowWorker(
@@ -2215,6 +2219,18 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                         time.sleep(2)  # 3초 -> 2초 단축
                 
                 # for 루프가 끝난 후 (모든 계정 처리 완료)
+                # 마지막 계정 처리 후 브라우저 종료
+                if self.driver:
+                    try:
+                        self.progress_signal.emit("🔒 마지막 계정 처리 완료 - 브라우저 종료 중...", False)
+                        self.driver.quit()  # type: ignore[attr-defined]
+                        self.driver = None
+                        time.sleep(1)
+                        self.progress_signal.emit("✅ 브라우저 종료 완료", True)
+                    except Exception as e:
+                        logger.warning(f"브라우저 종료 실패 (무시): {e}")
+                        self.driver = None
+                
                 # 무한 반복이 아니면 한 사이클만 실행하고 종료
                 if not self.infinite_loop:
                     break
