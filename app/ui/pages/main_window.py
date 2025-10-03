@@ -213,6 +213,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._batch_login_worker: Optional[BatchLoginWorker] = None
         self._validation_thread: Optional[QtCore.QThread] = None
         
+        # 브라우저 드라이버
+        self._driver: Any = None  # Chrome WebDriver
+        
         # 데이터 저장소
         self._accounts: Dict[str, AccountProfile] = {}
         self._selected_account_id: Optional[str] = None
