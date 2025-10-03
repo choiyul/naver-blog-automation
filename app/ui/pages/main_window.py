@@ -384,6 +384,8 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             logger.debug(f"계정 저장 중 오류 (무시됨): {e}")
 
+    @QtCore.pyqtSlot(str)
+    @QtCore.pyqtSlot()
     def _refresh_accounts_ui(self, selected_id: str | None = None) -> None:
         self.account_panel.set_accounts(self._accounts.values(), selected_id)
         if not self._accounts:
@@ -702,14 +704,9 @@ class MainWindow(QtWidgets.QMainWindow):
             account.login_initialized = True
             self._accounts[account_id] = account
             self._save_accounts()
-            # UI 업데이트를 메인 스레드에서 처리
-            QtCore.QMetaObject.invokeMethod(
-                self, 
-                "_refresh_accounts_ui", 
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(str, account_id)
-            )
-            self._log(f"'{account_id}' 계정을 로그인된 상태로 표시했습니다.")
+            # UI 업데이트 (메인 스레드에서 호출되므로 직접 호출 가능)
+            self._refresh_accounts_ui(account_id)
+            self._log(f"✅ '{account_id}' 계정을 로그인된 상태로 표시했습니다.")
             return True
         return False
 
