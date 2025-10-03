@@ -777,35 +777,87 @@ def _insert_image(
                 
         except Exception as e:
             LOGGER.warning(f"JavaScript 클립보드 복사 실패: {e}")
-            # Windows 전용 네이티브 클립보드 (Windows에서만 시도)
-            if _is_windows():
-                try:
-                    import win32clipboard  # type: ignore
-                    import win32con  # type: ignore
-                    from PIL import Image  # type: ignore
-                    img = Image.open(image_file_path).convert('RGB')
-                    import io
-                    output = io.BytesIO()
-                    img.save(output, format='BMP')
-                    data = output.getvalue()[14:]
-                    output.close()
-                    win32clipboard.OpenClipboard()
-                    win32clipboard.EmptyClipboard()
-                    win32clipboard.SetClipboardData(win32con.CF_DIB, data)
-                    win32clipboard.CloseClipboard()
-                    LOGGER.info("시스템 클립보드 복사 성공 (Windows)")
-                    _report(progress_callback, "시스템 클립보드 복사 완료", True)
-                except Exception as e2:
-                    LOGGER.error(f"Windows 클립보드 복사 실패: {e2}")
-                    _report(progress_callback, "클립보드 복사 실패 - 이미지는 스킵됩니다", False)
-                    return
-            else:
-                # macOS/Linux는 JavaScript 방식만 지원
-                LOGGER.warning(f"macOS/Linux에서는 JavaScript 클립보드만 지원됩니다.")
-                _report(progress_callback, "클립보드 복사 실패 - 이미지는 스킵됩니다", False)
+            # 클립보드 방식 실패 시 직접 이미지 삽입 방식 사용
+            LOGGER.info("클립보드 복사 실패 - 직접 이미지 삽입 방식으로 전환합니다")
+            _report(progress_callback, "직접 이미지 삽입 방식으로 전환", False)
+            
+            # JavaScript를 통해 직접 이미지를 본문에 삽입
+            try:
+                # 이미지 Base64 데이터 준비
+                with open(image_file_path, 'rb') as f:
+                    img_data = base64.b64encode(f.read()).decode('utf-8')
+                
+                file_ext = Path(image_file_path).suffix.lower()
+                if file_ext in ['.jpg', '.jpeg']:
+                    mime_type = 'image/jpeg'
+                elif file_ext == '.png':
+                    mime_type = 'image/png'
+                elif file_ext == '.gif':
+                    mime_type = 'image/gif'
+                elif file_ext == '.webp':
+                    mime_type = 'image/webp'
+                else:
+                    mime_type = 'image/png'
+                
+                # JavaScript로 이미지 요소 직접 삽입
+                insert_script = f"""
+                (function() {{
+                    try {{
+                        const base64Data = '{img_data}';
+                        const mimeType = '{mime_type}';
+                        
+                        // 본문 편집 영역 찾기
+                        const bodyArea = document.querySelector('.se-component.se-text .se-text-paragraph');
+                        if (!bodyArea) {{
+                            console.error('본문 영역을 찾을 수 없습니다');
+                            return false;
+                        }}
+                        
+                        // img 태그 생성
+                        const img = document.createElement('img');
+                        img.src = 'data:' + mimeType + ';base64,' + base64Data;
+                        img.style.maxWidth = '100%';
+                        img.style.height = 'auto';
+                        
+                        // 본문 맨 앞에 이미지 삽입
+                        if (bodyArea.firstChild) {{
+                            bodyArea.insertBefore(img, bodyArea.firstChild);
+                        }} else {{
+                            bodyArea.appendChild(img);
+                        }}
+                        
+                        // 줄바꿈 추가
+                        const br1 = document.createElement('br');
+                        const br2 = document.createElement('br');
+                        img.after(br1);
+                        br1.after(br2);
+                        
+                        console.log('이미지 삽입 성공');
+                        return true;
+                    }} catch (error) {{
+                        console.error('이미지 삽입 실패:', error);
+                        return false;
+                    }}
+                }})();
+                """
+                
+                result = driver.execute_script(insert_script)
+                if result:
+                    LOGGER.info("JavaScript로 이미지 직접 삽입 성공")
+                    _report(progress_callback, "이미지 삽입 완료", True)
+                else:
+                    LOGGER.warning("JavaScript 이미지 삽입 실패")
+                    _report(progress_callback, "이미지 삽입 실패 - 스킵됩니다", False)
+                
+                # 삽입 성공 여부와 관계없이 계속 진행
+                return
+                
+            except Exception as e3:
+                LOGGER.error(f"직접 이미지 삽입 실패: {e3}")
+                _report(progress_callback, "이미지 삽입 실패 - 스킵됩니다", False)
                 return
 
-        # 3. 본문 영역에 포커스하고 이미지 붙여넣기
+        # 3. 본문 영역에 포커스하고 이미지 붙여넣기 (클립보드 방식 성공 시에만 실행)
         try:
             _report(progress_callback, "본문 영역에 이미지 붙여넣기 중", False)
             
