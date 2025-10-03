@@ -75,6 +75,11 @@ def _cmd_key():
     return Keys.CONTROL  # Windows 전용
 
 
+def _is_windows() -> bool:
+    """Windows 운영체제인지 확인합니다."""
+    return platform.system() == 'Windows'
+
+
 def _cleanup_chrome_processes() -> None:
     """Chrome 프로세스를 완전히 정리합니다."""
     try:
@@ -267,7 +272,10 @@ def create_chrome_driver(user_data_dir: Path, retry_count: int = 3) -> webdriver
                     f"2. 작업 관리자에서 chrome.exe 프로세스를 모두 종료해주세요\n"
                     f"3. 컴퓨터를 재시작한 후 다시 시도해주세요\n"
                     f"4. 다른 Chrome 창이나 브라우저를 모두 닫고 시도해주세요"
-                ) from exc
+                )
+    
+    # 모든 시도 실패 (이 코드는 도달하지 않지만 타입 체커를 위해 추가)
+    raise RuntimeError("Chrome 브라우저를 생성할 수 없습니다.")
 
 
 def configure_user_data_dir(base_dir: Path, account_id: Optional[str] = None) -> Path:
