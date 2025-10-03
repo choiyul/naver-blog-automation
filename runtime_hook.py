@@ -24,8 +24,9 @@ except Exception as e:
 try:
     from PyQt5 import QtCore
     # PyInstaller 환경에서 Qt 플러그인 경로 자동 설정
-    if hasattr(sys, '_MEIPASS'):
-        qt_plugin_path = os.path.join(sys._MEIPASS, 'PyQt5', 'Qt5', 'plugins')
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        qt_plugin_path = os.path.join(meipass, 'PyQt5', 'Qt5', 'plugins')
         if os.path.exists(qt_plugin_path):
             os.environ['QT_PLUGIN_PATH'] = qt_plugin_path
 except Exception as e:
@@ -41,13 +42,15 @@ if sys.platform.startswith('win'):
         pass
 
 # 5. DLL 로드 경로 추가 (Windows)
-if sys.platform.startswith('win') and hasattr(sys, '_MEIPASS'):
-    # PyInstaller가 압축 해제한 임시 폴더를 DLL 검색 경로에 추가
-    try:
-        os.add_dll_directory(sys._MEIPASS)
-    except (AttributeError, OSError):
-        # Python 3.7 이하 또는 권한 문제
-        pass
+if sys.platform.startswith('win'):
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        # PyInstaller가 압축 해제한 임시 폴더를 DLL 검색 경로에 추가
+        try:
+            os.add_dll_directory(meipass)
+        except (AttributeError, OSError):
+            # Python 3.7 이하 또는 권한 문제
+            pass
 
 print("런타임 초기화 완료")
 
