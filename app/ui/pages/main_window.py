@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from pathlib import Path
 import os
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from selenium.common.exceptions import NoSuchElementException, WebDriverException
@@ -175,8 +176,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # 화면 중앙에 창 배치
         self.setGeometry(
             QtWidgets.QStyle.alignedRect(
-                QtCore.Qt.LeftToRight,
-                QtCore.Qt.AlignCenter,
+                QtCore.Qt.LeftToRight,  # type: ignore[attr-defined]
+                QtCore.Qt.AlignCenter,  # type: ignore[attr-defined]
                 self.size(),
                 avail,
             )
@@ -208,7 +209,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.profiles_root.mkdir(parents=True, exist_ok=True)
 
         # 워커 스레드들
-        self._worker: Optional[WorkflowWorker] = None
+        self._worker: Any = None  # WorkflowWorker | MultiAccountWorkflowWorker | None
         self._batch_login_worker: Optional[BatchLoginWorker] = None
         self._validation_thread: Optional[QtCore.QThread] = None
         
@@ -1107,7 +1108,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 if used_selector == '#keep':
                     # div 요소의 경우 aria-checked 속성 확인
                     is_checked = checkbox_element.get_attribute('aria-checked') == 'true'
-                elif used_selector == '#nvlong' or 'input' in used_selector:
+                elif used_selector == '#nvlong' or (used_selector and 'input' in used_selector):
                     # input 요소의 경우 checked 속성 확인
                     is_checked = checkbox_element.is_selected() or checkbox_element.get_attribute('checked')
                 else:
@@ -1491,8 +1492,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if url and url.startswith("http"):
             self.repeat_panel.add_post_to_history(display_text, url)
         else:
-            # URL이 없는 경우 (실패)
-            self.repeat_panel.add_post_to_history(display_text, None)
+            # URL이 없는 경우 (실패) - 빈 문자열 전달
+            self.repeat_panel.add_post_to_history(display_text, "")
 
     def _on_workflow_finished(self, driver: object) -> None:
         self._driver = driver
@@ -1564,17 +1565,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _apply_theme(self, theme: str) -> None:
         self._current_theme = theme
-        theme_map = DARK_THEME if theme == "dark" else LIGHT_THEME
+        theme_map: Any = DARK_THEME if theme == "dark" else LIGHT_THEME
         palette = QtGui.QPalette()
-        palette.setColor(QtGui.QPalette.Window, QtGui.QColor(theme_map["palette"]["window"]))
-        palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor(theme_map["palette"]["text"]))
-        palette.setColor(QtGui.QPalette.Base, QtGui.QColor(theme_map["palette"]["base"]))
-        palette.setColor(QtGui.QPalette.Text, QtGui.QColor(theme_map["palette"]["text"]))
-        palette.setColor(QtGui.QPalette.Button, QtGui.QColor(theme_map["palette"]["button"]))
-        palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(theme_map["palette"]["button_text"]))
-        palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(theme_map["palette"]["highlight"]))
-        palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(theme_map["palette"]["highlight_text"]))
-        QtWidgets.QApplication.instance().setPalette(palette)
+        palette.setColor(QtGui.QPalette.Window, QtGui.QColor(theme_map["palette"]["window"]))  # type: ignore[index]
+        palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor(theme_map["palette"]["text"]))  # type: ignore[index]
+        palette.setColor(QtGui.QPalette.Base, QtGui.QColor(theme_map["palette"]["base"]))  # type: ignore[index]
+        palette.setColor(QtGui.QPalette.Text, QtGui.QColor(theme_map["palette"]["text"]))  # type: ignore[index]
+        palette.setColor(QtGui.QPalette.Button, QtGui.QColor(theme_map["palette"]["button"]))  # type: ignore[index]
+        palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(theme_map["palette"]["button_text"]))  # type: ignore[index]
+        palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(theme_map["palette"]["highlight"]))  # type: ignore[index]
+        palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(theme_map["palette"]["highlight_text"]))  # type: ignore[index]
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.setPalette(palette)  # type: ignore[attr-defined]
         self._load_stylesheet(theme_map)
         self.header.set_theme_icon(theme_map, theme == "dark")
         
@@ -1608,7 +1611,9 @@ class MainWindow(QtWidgets.QMainWindow):
         for token, value in replacements.items():
             qss = qss.replace(token, str(value))
 
-        QtWidgets.QApplication.instance().setStyleSheet(qss)
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.setStyleSheet(qss)  # type: ignore[attr-defined]
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -1965,7 +1970,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # 브라우저 정리
             try:
                 if self._driver:
-                    self._driver.quit()
+                    self._driver.quit()  # type: ignore[attr-defined]
                     self._non_blocking_wait_ms(1000)
             except:
                 pass
@@ -1999,7 +2004,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # 현재 브라우저 종료
             if self._driver:
                 try:
-                    self._driver.quit()
+                    self._driver.quit()  # type: ignore[attr-defined]
                     self._driver = None
                     self._log("✅ 현재 브라우저 종료 완료")
                 except Exception as e:
@@ -2056,7 +2061,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # 브라우저 정리
             if self._driver:
                 try:
-                    self._driver.quit()
+                    self._driver.quit()  # type: ignore[attr-defined]
                 except Exception:
                     pass
         except Exception as e:
