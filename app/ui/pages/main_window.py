@@ -2168,7 +2168,7 @@ class MultiAccountWorkflowWorker(QtCore.QThread):
                     )
 
                     # 첫 번째 계정에서만 브라우저 생성
-                    if index == 0:
+                    if index == 1 and cycle_count == 1:
                         self.progress_signal.emit(f"🔐 '{account_id}' 계정으로 브라우저를 시작합니다...", False)
                         
                         # 새 브라우저 생성 (계정별 프로필 사용)
